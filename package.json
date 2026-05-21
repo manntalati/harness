@@ -8,7 +8,7 @@
     "agent-orchestrator-mcp": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/dashboard/public dist/dashboard/",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
   },
