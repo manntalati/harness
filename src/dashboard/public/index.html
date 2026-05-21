@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Orchestrator — Dashboard</title>
+  <style>
+    :root {
+      --bg: #f5f0e8;
+      --surface: #ffffff;
+      --surface2: #f0ebe3;
+      --border: #e0d8cc;
+      --text: #2d2b28;
+      --text-dim: #8a847a;
+      --accent: #6ba3be;
+      --accent-light: rgba(107, 163, 190, 0.12);
+      --accent-hover: #5a91ad;
+      --green: #3d9970;
+      --green-light: rgba(61, 153, 112, 0.10);
+      --yellow: #c4960c;
+      --red: #c0392b;
+      --red-light: rgba(192, 57, 43, 0.08);
+      --purple: #8e6fbf;
+      --purple-light: rgba(142, 111, 191, 0.10);
+      --blue: #6ba3be;
+      --blue-light: rgba(107, 163, 190, 0.10);
+      --clay: #c97b4b;
+      --clay-light: rgba(201, 123, 75, 0.10);
+      --radius: 10px;
+      --shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: var(--shadow);
+    }
+
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      color: var(--text);
+    }
+
+    #connection-status {
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-dim);
+    }
+
+    #connection-status .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+    }
+
+    #connection-status.connected .dot {
+      background: var(--green);
+      box-shadow: 0 0 6px rgba(61,153,112,0.4);
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* ── Stats bar ─────────────────────────────────────────────── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .stat-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    /* ── Action panels ─────────────────────────────────────────── */
+    .action-panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 900px) {
+      .action-panels { grid-template-columns: 1fr; }
+    }
+
+    .action-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid transparent;
+    }
+
+    .panel-header:hover { background: var(--surface2); }
+
+    .panel-header h3 {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+    }
+
+    .panel-toggle {
+      font-size: 18px;
+      color: var(--text-dim);
+      transition: transform 0.2s;
+    }
+
+    .panel-body {
+      padding: 0 16px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+
+    .panel-body.open {
+      padding: 16px;
+      max-height: 600px;
+      border-top: 1px solid var(--border);
+    }
+
+    .form-group {
+      margin-bottom: 12px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-input,
+    .form-textarea {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus,
+    .form-textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .form-textarea { resize: vertical; min-height: 60px; }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .form-row .form-group { flex: 1; }
+
+    .form-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .form-check input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .form-check label {
+      font-size: 13px;
+      color: var(--text);
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 500;
+    }
+
+    .form-btn {
+      padding: 8px 20px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .form-btn:hover { background: var(--accent-hover); }
+    .form-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .form-feedback {
+      font-size: 12px;
+      margin-top: 8px;
+      min-height: 18px;
+    }
+
+    .form-feedback.success { color: var(--green); }
+    .form-feedback.error { color: var(--red); }
+
+    /* ── Section ───────────────────────────────────────────────── */
+    .section {
+      margin-bottom: 28px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .section-header h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    /* ── Orchestration cards ───────────────────────────────────── */
+    .orch-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .orch-card .orch-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .orch-card .goal {
+      font-size: 14px;
+      font-weight: 600;
+      max-width: 70%;
+    }
+
+    .orch-card .meta {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    .sub-tasks {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 10px;
+    }
+
+    .sub-task {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .sub-task .st-name {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .sub-task .st-status {
+      font-size: 11px;
+    }
+
+    .sub-task .st-iteration {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    /* ── Agent table ───────────────────────────────────────────── */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .agent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .agent-table th {
+      text-align: left;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      font-weight: 500;
+      background: var(--surface2);
+    }
+
+    .agent-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+
+    .agent-table tr:last-child td { border-bottom: none; }
+
+    .agent-table tr:hover td {
+      background: var(--surface2);
+    }
+
+    .agent-table .agent-name {
+      font-weight: 600;
+    }
+
+    .agent-table .agent-id {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .table-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-sm {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+
+    .btn-sm:hover { background: var(--border); }
+
+    .btn-cancel {
+      color: var(--red);
+      border-color: var(--red-light);
+    }
+
+    /* ── Status badge ──────────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .badge.pending    { background: rgba(138,132,122,0.12); color: var(--text-dim); }
+    .badge.running    { background: var(--accent-light); color: var(--accent); }
+    .badge.planning   { background: var(--purple-light); color: var(--purple); }
+    .badge.executing  { background: var(--accent-light); color: var(--accent); }
+    .badge.reviewing  { background: var(--clay-light); color: var(--clay); }
+    .badge.synthesizing { background: var(--blue-light); color: var(--blue); }
+    .badge.completed  { background: var(--green-light); color: var(--green); }
+    .badge.failed     { background: var(--red-light); color: var(--red); }
+    .badge.cancelled  { background: rgba(138,132,122,0.12); color: var(--text-dim); }
+
+    .badge.running::before,
+    .badge.planning::before,
+    .badge.executing::before,
+    .badge.reviewing::before,
+    .badge.synthesizing::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── Review verdict badges ─────────────────────────────────── */
+    .verdict-approved { color: var(--green); font-weight: 600; font-size: 11px; }
+    .verdict-revise   { color: var(--clay); font-weight: 600; font-size: 11px; }
+    .verdict-rejected { color: var(--red); font-weight: 600; font-size: 11px; }
+
+    /* ── Event log ─────────────────────────────────────────────── */
+    .event-log {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .event-entry {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 11px;
+    }
+
+    .event-entry:last-child { border-bottom: none; }
+
+    .event-entry .event-time {
+      color: var(--text-dim);
+      white-space: nowrap;
+      min-width: 75px;
+    }
+
+    .event-entry .event-kind {
+      font-weight: 600;
+      min-width: 130px;
+    }
+
+    .event-entry .event-detail {
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 24px;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    /* ── Result modal ──────────────────────────────────────────── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(45,43,40,0.5);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(2px);
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      width: 90%;
+      max-width: 800px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    }
+
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h3 { font-size: 14px; }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .modal-close:hover { color: var(--text); }
+
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.6;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agent Orchestrator</h1>
+    <div id="connection-status">
+      <span class="dot"></span>
+      <span class="label">disconnected</span>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat-card">
+        <div class="label">Total Agents</div>
+        <div class="value" id="stat-total">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Running</div>
+        <div class="value" id="stat-running" style="color:var(--accent)">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Completed</div>
+        <div class="value" id="stat-completed" style="color:var(--green)">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Failed</div>
+        <div class="value" id="stat-failed" style="color:var(--red)">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Orchestrations</div>
+        <div class="value" id="stat-orchs" style="color:var(--purple)">0</div>
+      </div>
+    </div>
+
+    <!-- Action panels -->
+    <div class="action-panels">
+      <!-- Create Agent -->
+      <div class="action-panel">
+        <div class="panel-header" onclick="togglePanel('agent-panel')">
+          <h3>Create Agent</h3>
+          <span class="panel-toggle" id="agent-panel-toggle">+</span>
+        </div>
+        <div class="panel-body" id="agent-panel">
+          <div class="form-group">
+            <label>Name</label>
+            <input class="form-input" id="agent-name" placeholder="e.g. code-reviewer" />
+          </div>
+          <div class="form-group">
+            <label>Role / System Prompt</label>
+            <textarea class="form-textarea" id="agent-role" rows="3" placeholder="You are a senior software engineer..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Task</label>
+            <textarea class="form-textarea" id="agent-task" rows="3" placeholder="Review the following code for bugs..."></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Model (optional)</label>
+              <input class="form-input" id="agent-model" placeholder="claude-sonnet-4-6-20250514" />
+            </div>
+          </div>
+          <button class="form-btn" onclick="createAgent()">Spawn Agent</button>
+          <div class="form-feedback" id="agent-feedback"></div>
+        </div>
+      </div>
+
+      <!-- Start Orchestration -->
+      <div class="action-panel">
+        <div class="panel-header" onclick="togglePanel('orch-panel')">
+          <h3>Start Orchestration</h3>
+          <span class="panel-toggle" id="orch-panel-toggle">+</span>
+        </div>
+        <div class="panel-body" id="orch-panel">
+          <div class="form-group">
+            <label>Goal</label>
+            <textarea class="form-textarea" id="orch-goal" rows="3" placeholder="Build a REST API with authentication, user profiles, and a settings page..."></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Model (optional)</label>
+              <input class="form-input" id="orch-model" placeholder="claude-sonnet-4-6-20250514" />
+            </div>
+            <div class="form-group">
+              <label>Max Sub-Tasks</label>
+              <input class="form-input" id="orch-max-tasks" type="number" placeholder="10" />
+            </div>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="orch-review" onchange="toggleReviewOpts()" />
+            <label for="orch-review">Enable code review (PM reviews and iterates on outputs)</label>
+          </div>
+          <div class="form-group" id="review-iterations-group" style="display:none">
+            <label>Max Review Iterations</label>
+            <input class="form-input" id="orch-review-iters" type="number" placeholder="2" style="width:80px" />
+          </div>
+          <button class="form-btn" onclick="startOrchestration()">Start Orchestration</button>
+          <div class="form-feedback" id="orch-feedback"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Orchestrations -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Orchestrations</h2>
+      </div>
+      <div id="orchestrations-container">
+        <div class="empty-state">No orchestrations yet</div>
+      </div>
+    </div>
+
+    <!-- Agents -->
+    <div class="section">
+      <div class="section-header">
+        <h2>All Agents</h2>
+      </div>
+      <div id="agents-container">
+        <div class="empty-state">No agents yet</div>
+      </div>
+    </div>
+
+    <!-- Event log -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Event Log</h2>
+      </div>
+      <div class="event-log" id="event-log">
+        <div class="empty-state">Waiting for events...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result modal -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Result</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────
+    let agents = [];
+    let orchestrations = [];
+    const events = [];
+    const MAX_EVENTS = 200;
+
+    // ── Panel toggles ─────────────────────────────────────────────
+    function togglePanel(id) {
+      const panel = document.getElementById(id);
+      const toggle = document.getElementById(id + '-toggle');
+      const isOpen = panel.classList.contains('open');
+      panel.classList.toggle('open');
+      toggle.textContent = isOpen ? '+' : '-';
+    }
+
+    function toggleReviewOpts() {
+      const checked = document.getElementById('orch-review').checked;
+      document.getElementById('review-iterations-group').style.display = checked ? 'block' : 'none';
+    }
+
+    // ── Form actions ──────────────────────────────────────────────
+    async function createAgent() {
+      const fb = document.getElementById('agent-feedback');
+      const name = document.getElementById('agent-name').value.trim();
+      const role = document.getElementById('agent-role').value.trim();
+      const task = document.getElementById('agent-task').value.trim();
+      const model = document.getElementById('agent-model').value.trim();
+
+      if (!name || !role || !task) {
+        fb.textContent = 'Name, role, and task are required.';
+        fb.className = 'form-feedback error';
+        return;
+      }
+
+      try {
+        const body = { name, role, task };
+        if (model) body.model = model;
+
+        const res = await fetch('/api/agents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+
+        fb.textContent = 'Agent spawned: ' + data.id.slice(0, 8) + '...';
+        fb.className = 'form-feedback success';
+        document.getElementById('agent-name').value = '';
+        document.getElementById('agent-role').value = '';
+        document.getElementById('agent-task').value = '';
+        document.getElementById('agent-model').value = '';
+      } catch (e) {
+        fb.textContent = e.message;
+        fb.className = 'form-feedback error';
+      }
+    }
+
+    async function startOrchestration() {
+      const fb = document.getElementById('orch-feedback');
+      const goal = document.getElementById('orch-goal').value.trim();
+      const model = document.getElementById('orch-model').value.trim();
+      const maxStr = document.getElementById('orch-max-tasks').value.trim();
+      const enableReview = document.getElementById('orch-review').checked;
+      const itersStr = document.getElementById('orch-review-iters').value.trim();
+
+      if (!goal) {
+        fb.textContent = 'Goal is required.';
+        fb.className = 'form-feedback error';
+        return;
+      }
+
+      try {
+        const body = { goal };
+        if (model) body.model = model;
+        if (maxStr) body.maxSubTasks = parseInt(maxStr, 10);
+        if (enableReview) {
+          body.enableReview = true;
+          if (itersStr) body.maxReviewIterations = parseInt(itersStr, 10);
+        }
+
+        const res = await fetch('/api/orchestrations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+
+        fb.textContent = 'Orchestration started: ' + data.id.slice(0, 8) + '...';
+        fb.className = 'form-feedback success';
+        document.getElementById('orch-goal').value = '';
+        document.getElementById('orch-model').value = '';
+        document.getElementById('orch-max-tasks').value = '';
+        document.getElementById('orch-review').checked = false;
+        document.getElementById('orch-review-iters').value = '';
+        toggleReviewOpts();
+        fetchOrchestrations().then(render);
+      } catch (e) {
+        fb.textContent = e.message;
+        fb.className = 'form-feedback error';
+      }
+    }
+
+    async function cancelAgent(id) {
+      await fetch('/api/agents/' + id + '/cancel', { method: 'POST' });
+    }
+
+    async function cancelOrchestration(id) {
+      await fetch('/api/orchestrations/' + id + '/cancel', { method: 'POST' });
+      fetchOrchestrations().then(render);
+    }
+
+    // ── Initial fetch ─────────────────────────────────────────────
+    async function fetchInitialState() {
+      try {
+        const [agentsRes, orchRes] = await Promise.all([
+          fetch('/api/agents'),
+          fetch('/api/orchestrations'),
+        ]);
+        agents = await agentsRes.json();
+        orchestrations = await orchRes.json();
+        render();
+      } catch (e) {
+        console.error('Failed to fetch initial state:', e);
+      }
+    }
+
+    // ── SSE ───────────────────────────────────────────────────────
+    function connectSSE() {
+      const source = new EventSource('/events');
+      const statusEl = document.getElementById('connection-status');
+
+      source.onopen = () => {
+        statusEl.className = 'connected';
+        statusEl.querySelector('.label').textContent = 'connected';
+      };
+
+      source.onerror = () => {
+        statusEl.className = '';
+        statusEl.querySelector('.label').textContent = 'disconnected';
+      };
+
+      source.onmessage = (e) => {
+        const event = JSON.parse(e.data);
+        events.unshift(event);
+        if (events.length > MAX_EVENTS) events.pop();
+
+        handleEvent(event);
+        render();
+      };
+    }
+
+    function handleEvent(event) {
+      const { kind, agentId } = event;
+      const idx = agents.findIndex(a => a.id === agentId);
+
+      if (kind === 'agent:created' && idx === -1) {
+        agents.push({
+          id: agentId,
+          name: event.config.name,
+          role: event.config.role,
+          status: 'pending',
+          progress: null,
+          createdAt: event.timestamp,
+          completedAt: null,
+        });
+      } else if (kind === 'agent:started' && idx >= 0) {
+        agents[idx].status = 'running';
+      } else if (kind === 'agent:progress' && idx >= 0) {
+        agents[idx].progress = event.progress;
+      } else if (kind === 'agent:completed' && idx >= 0) {
+        agents[idx].status = 'completed';
+        agents[idx].completedAt = event.timestamp;
+      } else if (kind === 'agent:failed' && idx >= 0) {
+        agents[idx].status = 'failed';
+        agents[idx].completedAt = event.timestamp;
+      } else if (kind === 'agent:cancelled' && idx >= 0) {
+        agents[idx].status = 'cancelled';
+        agents[idx].completedAt = event.timestamp;
+      }
+
+      if (['agent:completed', 'agent:failed', 'agent:cancelled'].includes(kind)) {
+        fetchOrchestrations();
+      }
+    }
+
+    async function fetchOrchestrations() {
+      try {
+        const res = await fetch('/api/orchestrations');
+        orchestrations = await res.json();
+      } catch (e) { /* ignore */ }
+    }
+
+    // ── Render ────────────────────────────────────────────────────
+    function render() {
+      renderStats();
+      renderOrchestrations();
+      renderAgents();
+      renderEvents();
+    }
+
+    function renderStats() {
+      const running = agents.filter(a => a.status === 'running').length;
+      const completed = agents.filter(a => a.status === 'completed').length;
+      const failed = agents.filter(a => a.status === 'failed').length;
+
+      document.getElementById('stat-total').textContent = agents.length;
+      document.getElementById('stat-running').textContent = running;
+      document.getElementById('stat-completed').textContent = completed;
+      document.getElementById('stat-failed').textContent = failed;
+      document.getElementById('stat-orchs').textContent = orchestrations.length;
+    }
+
+    function renderOrchestrations() {
+      const container = document.getElementById('orchestrations-container');
+      if (orchestrations.length === 0) {
+        container.innerHTML = '<div class="empty-state">No orchestrations yet</div>';
+        return;
+      }
+
+      container.innerHTML = orchestrations.map(orch => `
+        <div class="orch-card">
+          <div class="orch-header">
+            <div>
+              <div class="goal">${escapeHtml(orch.goal)}</div>
+              <div class="meta">
+                ID: ${orch.id.slice(0, 8)}...
+                &middot; ${orch.subTaskCount} sub-tasks
+                &middot; ${orch.completedSubTasks}/${orch.subTaskCount} done
+                &middot; ${orch.tokenUsage.inputTokens + orch.tokenUsage.outputTokens} tokens
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="badge ${orch.status}">${orch.status}</span>
+              ${['planning','executing','reviewing','synthesizing'].includes(orch.status) ? `<button class="btn-sm btn-cancel" onclick="cancelOrchestration('${orch.id}')">Cancel</button>` : ''}
+            </div>
+          </div>
+          <div class="sub-tasks" id="orch-subtasks-${orch.id}">
+            Loading...
+          </div>
+        </div>
+      `).join('');
+
+      orchestrations.forEach(orch => fetchOrchestrationDetail(orch.id));
+    }
+
+    async function fetchOrchestrationDetail(id) {
+      try {
+        const res = await fetch('/api/orchestrations/' + id);
+        const detail = await res.json();
+        const container = document.getElementById('orch-subtasks-' + id);
+        if (!container || !detail.subTasks) return;
+
+        if (detail.subTasks.length === 0) {
+          container.innerHTML = '<div style="font-size:12px;color:var(--text-dim)">Planning sub-tasks...</div>';
+          return;
+        }
+
+        container.innerHTML = detail.subTasks.map(st => {
+          const iterLabel = st.iteration && st.iteration > 1 ? ` <span style="color:var(--accent);font-size:10px;font-weight:600">v${st.iteration}</span>` : '';
+          const reviewBadges = (st.reviewHistory || []).map(r =>
+            `<span class="verdict-${r.verdict}">${r.verdict}</span>`
+          ).join(' ');
+
+          return `
+            <div class="sub-task" onclick="viewAgentResult('${st.agentId}')" style="cursor:pointer">
+              <div class="st-name">${escapeHtml(st.name)}${iterLabel}</div>
+              <div class="st-status">
+                <span class="badge ${st.status}">${st.status}</span>
+                ${reviewBadges}
+                ${st.error ? '<span style="color:var(--red);font-size:11px;margin-left:6px">' + escapeHtml(st.error).slice(0, 50) + '</span>' : ''}
+              </div>
+              ${st.iteration && st.iteration > 1 ? `<div class="st-iteration">Review iteration ${st.iteration}</div>` : ''}
+            </div>
+          `;
+        }).join('');
+
+        if (detail.finalResult) {
+          container.innerHTML += `
+            <div class="sub-task" onclick="showFinalResult('${id}')" style="cursor:pointer;border-color:var(--accent)">
+              <div class="st-name" style="color:var(--accent)">View Final Result</div>
+              <div class="st-status"><span class="badge completed">ready</span></div>
+            </div>
+          `;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function renderAgents() {
+      const container = document.getElementById('agents-container');
+      if (agents.length === 0) {
+        container.innerHTML = '<div class="empty-state">No agents yet</div>';
+        return;
+      }
+
+      const order = { running: 0, pending: 1, completed: 2, failed: 3, cancelled: 4 };
+      const sorted = [...agents].sort((a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5));
+
+      container.innerHTML = `
+        <div class="table-wrap">
+          <table class="agent-table">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Created</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(a => `
+                <tr>
+                  <td>
+                    <div class="agent-name">${escapeHtml(a.name)}</div>
+                    <div class="agent-id">${a.id.slice(0, 8)}...</div>
+                  </td>
+                  <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(a.role ?? '')}</td>
+                  <td><span class="badge ${a.status}">${a.status}</span></td>
+                  <td>${a.progress ? a.progress.textLength + ' chars' : '—'}</td>
+                  <td style="font-size:11px;color:var(--text-dim)">${formatTime(a.createdAt)}</td>
+                  <td>
+                    <div class="table-actions">
+                      ${a.status === 'completed' ? `<button class="btn-sm" onclick="viewAgentResult('${a.id}')">View</button>` : ''}
+                      ${a.status === 'running' ? `<button class="btn-sm btn-cancel" onclick="cancelAgent('${a.id}')">Cancel</button>` : ''}
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderEvents() {
+      const container = document.getElementById('event-log');
+      if (events.length === 0) {
+        container.innerHTML = '<div class="empty-state">Waiting for events...</div>';
+        return;
+      }
+
+      const kindColors = {
+        'agent:created': 'var(--text-dim)',
+        'agent:started': 'var(--accent)',
+        'agent:progress': 'var(--blue)',
+        'agent:completed': 'var(--green)',
+        'agent:failed': 'var(--red)',
+        'agent:cancelled': 'var(--text-dim)',
+      };
+
+      container.innerHTML = events.slice(0, 50).map(ev => {
+        let detail = ev.agentId.slice(0, 8) + '...';
+        if (ev.kind === 'agent:created') detail = ev.config?.name ?? detail;
+        if (ev.kind === 'agent:progress') detail += ' (' + (ev.progress?.textLength ?? 0) + ' chars)';
+        if (ev.kind === 'agent:failed') detail += ' — ' + (ev.error?.slice(0, 60) ?? '');
+
+        return `
+          <div class="event-entry">
+            <span class="event-time">${formatTime(ev.timestamp)}</span>
+            <span class="event-kind" style="color:${kindColors[ev.kind] ?? 'var(--text)'}">${ev.kind}</span>
+            <span class="event-detail">${escapeHtml(detail)}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ── Modal ─────────────────────────────────────────────────────
+    async function viewAgentResult(id) {
+      try {
+        const res = await fetch('/api/agents/' + id);
+        const data = await res.json();
+        document.getElementById('modal-title').textContent = data.name + ' — Result';
+        document.getElementById('modal-body').textContent = data.result ?? data.error ?? 'No result yet';
+        document.getElementById('modal-overlay').classList.add('open');
+      } catch (e) {
+        console.error('Failed to fetch agent result:', e);
+      }
+    }
+
+    async function showFinalResult(id) {
+      try {
+        const res = await fetch('/api/orchestrations/' + id);
+        const data = await res.json();
+        document.getElementById('modal-title').textContent = 'Orchestration — Final Result';
+        document.getElementById('modal-body').textContent = data.finalResult ?? 'No result yet';
+        document.getElementById('modal-overlay').classList.add('open');
+      } catch (e) {
+        console.error('Failed to fetch orchestration result:', e);
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    }
+
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // ── Helpers ────────────────────────────────────────────────────
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function formatTime(ts) {
+      try {
+        const d = new Date(ts);
+        return d.toLocaleTimeString('en-US', { hour12: false });
+      } catch {
+        return '—';
+      }
+    }
+
+    // ── Auto-refresh orchestrations while any are active ──────────
+    setInterval(() => {
+      const hasActive = orchestrations.some(o =>
+        ['planning', 'executing', 'reviewing', 'synthesizing'].includes(o.status)
+      );
+      if (hasActive) {
+        fetchOrchestrations().then(render);
+      }
+    }, 3000);
+
+    // ── Boot ──────────────────────────────────────────────────────
+    fetchInitialState();
+    connectSSE();
+  </script>
+</body>
+</html>

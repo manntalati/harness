@@ -12,8 +12,22 @@ import {
   handleCreateTemplate,
   handleListTemplates,
 } from "./tools/templates.js";
+import { Orchestrator } from "./agents/orchestrator.js";
+import {
+  CancelOrchestrationSchema,
+  GetOrchestrationSchema,
+  StartOrchestrationSchema,
+  handleCancelOrchestration,
+  handleGetOrchestrationStatus,
+  handleListOrchestrations,
+  handleStartOrchestration,
+} from "./tools/orchestrate.js";
+import { startDashboard } from "./dashboard/server.js";
+
+const DASHBOARD_PORT = parseInt(process.env.DASHBOARD_PORT ?? "3456", 10);
 
 const manager = new AgentManager();
+const orchestrator = new Orchestrator(manager);
 
 const server = new McpServer({
   name: "agent-orchestrator",
@@ -62,7 +76,40 @@ server.tool(
   async () => handleListTemplates(manager),
 );
 
+// ── Orchestration tools ───────────────────────────────────────────
+
+server.tool(
+  "start_orchestration",
+  "Start a PM-managed orchestration. Give it a high-level goal and the PM agent will decompose it into sub-tasks, spawn worker agents, monitor them, and synthesize the final result.",
+  StartOrchestrationSchema.shape,
+  async (args) => handleStartOrchestration(orchestrator, args),
+);
+
+server.tool(
+  "get_orchestration_status",
+  "Check the status of an orchestration — see the plan, sub-task progress, and final result.",
+  GetOrchestrationSchema.shape,
+  async (args) => handleGetOrchestrationStatus(orchestrator, args),
+);
+
+server.tool(
+  "list_orchestrations",
+  "List all orchestrations and their current status.",
+  {},
+  async () => handleListOrchestrations(orchestrator),
+);
+
+server.tool(
+  "cancel_orchestration",
+  "Cancel a running orchestration and all its worker agents.",
+  CancelOrchestrationSchema.shape,
+  async (args) => handleCancelOrchestration(orchestrator, args),
+);
+
 async function main() {
+  // Start the dashboard HTTP server (uses stderr for logs, won't interfere with stdio)
+  startDashboard({ port: DASHBOARD_PORT, manager, orchestrator });
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

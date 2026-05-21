@@ -1,13 +1,23 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { AgentConfig, AgentState, AgentTemplate } from "./types.js";
-import { runAgent } from "./runner.js";
+import {
+  AgentConfig,
+  AgentEvent,
+  AgentProgress,
+  AgentState,
+  AgentTemplate,
+} from "./types.js";
+import { RunResult, runAgentStreaming } from "./runner.js";
 import { DEFAULT_TEMPLATES } from "../templates/defaults.js";
+
+export type AgentEventListener = (event: AgentEvent) => void;
 
 export class AgentManager {
   private agents = new Map<string, AgentState>();
   private templates = new Map<string, AgentTemplate>();
   private client: Anthropic;
+  private emitter = new EventEmitter();
 
   constructor() {
     this.client = new Anthropic();
@@ -15,6 +25,18 @@ export class AgentManager {
     for (const template of DEFAULT_TEMPLATES) {
       this.templates.set(template.name, template);
     }
+  }
+
+  on(event: "agent-event", listener: AgentEventListener): void {
+    this.emitter.on(event, listener);
+  }
+
+  off(event: "agent-event", listener: AgentEventListener): void {
+    this.emitter.off(event, listener);
+  }
+
+  private emitEvent(event: AgentEvent): void {
+    this.emitter.emit("agent-event", event);
   }
 
   createAgent(config: AgentConfig): string {
@@ -31,28 +53,73 @@ export class AgentManager {
 
     this.agents.set(id, state);
 
+    this.emitEvent({
+      kind: "agent:created",
+      agentId: id,
+      timestamp: new Date(),
+      config,
+    });
+
     state.status = "running";
-    runAgent(this.client, config, abortController.signal)
-      .then((result) => {
+    this.emitEvent({
+      kind: "agent:started",
+      agentId: id,
+      timestamp: new Date(),
+    });
+
+    const onProgress = (progress: AgentProgress) => {
+      state.progress = progress;
+      this.emitEvent({
+        kind: "agent:progress",
+        agentId: id,
+        timestamp: new Date(),
+        progress,
+      });
+    };
+
+    runAgentStreaming(this.client, config, abortController.signal, onProgress)
+      .then((result: RunResult) => {
         state.status = "completed";
         state.result = result.text;
-        state.tokenUsage = {
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-        };
+        state.tokenUsage = result.tokenUsage;
         state.completedAt = new Date();
+
+        this.emitEvent({
+          kind: "agent:completed",
+          agentId: id,
+          timestamp: new Date(),
+          tokenUsage: result.tokenUsage,
+          resultPreview: result.text.slice(0, 200),
+        });
       })
       .catch((err: unknown) => {
+        state.completedAt = new Date();
+
         if (abortController.signal.aborted) {
           state.status = "cancelled";
+          this.emitEvent({
+            kind: "agent:cancelled",
+            agentId: id,
+            timestamp: new Date(),
+          });
         } else {
+          const errorMsg = err instanceof Error ? err.message : String(err);
           state.status = "failed";
-          state.error = err instanceof Error ? err.message : String(err);
+          state.error = errorMsg;
+          this.emitEvent({
+            kind: "agent:failed",
+            agentId: id,
+            timestamp: new Date(),
+            error: errorMsg,
+          });
         }
-        state.completedAt = new Date();
       });
 
     return id;
+  }
+
+  getAgent(id: string): AgentState | undefined {
+    return this.agents.get(id);
   }
 
   listAgents() {
@@ -61,6 +128,7 @@ export class AgentManager {
       name: a.config.name,
       role: a.config.role,
       status: a.status,
+      progress: a.progress ?? null,
       createdAt: a.createdAt.toISOString(),
       completedAt: a.completedAt?.toISOString() ?? null,
     }));
