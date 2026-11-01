@@ -1,120 +1,168 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { AgentManager } from "./agents/manager.js";
-import { CreateAgentSchema, handleCreateAgent } from "./tools/create-agent.js";
-import { handleListAgents } from "./tools/list-agents.js";
-import { GetResultSchema, handleGetResult } from "./tools/get-result.js";
-import { CancelAgentSchema, handleCancelAgent } from "./tools/cancel-agent.js";
-import {
-  CreateTemplateSchema,
-  handleCreateTemplate,
-  handleListTemplates,
-} from "./tools/templates.js";
-import { Orchestrator } from "./agents/orchestrator.js";
-import {
-  CancelOrchestrationSchema,
-  GetOrchestrationSchema,
-  StartOrchestrationSchema,
-  handleCancelOrchestration,
-  handleGetOrchestrationStatus,
-  handleListOrchestrations,
-  handleStartOrchestration,
-} from "./tools/orchestrate.js";
-import { startDashboard } from "./dashboard/server.js";
+import { loadConfig } from "./config.js";
+import { World } from "./world/world.js";
+import { Scheduler } from "./world/scheduler.js";
+import { HarnessContext, callMethod } from "./api/methods.js";
+import { createMcpServer, remoteCaller } from "./api/mcp.js";
+import { APP_ID, startHttpServer } from "./server/http.js";
+import { EngineEnv, detectClaudeCli, engineProblem, resolveEngine } from "./agents/engine.js";
 
-const DASHBOARD_PORT = parseInt(process.env.DASHBOARD_PORT ?? "3456", 10);
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const VERSION = (JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as { version: string }).version;
 
-const manager = new AgentManager();
-const orchestrator = new Orchestrator(manager);
+const USAGE = `agent-harness — a playground of collaborating AI agents
 
-const server = new McpServer({
-  name: "agent-orchestrator",
-  version: "0.1.0",
-});
+Usage:
+  agent-harness serve   Run the playground (web UI + agents) in this terminal
+  agent-harness mcp     Run as an MCP server over stdio (default). If a playground
+                        is already running, tool calls are forwarded to it.
 
-server.tool(
-  "create_agent",
-  "Spawn a new AI agent with a specific role and task. The agent runs asynchronously — use get_agent_result to check on it.",
-  CreateAgentSchema.shape,
-  async (args) => handleCreateAgent(manager, args),
-);
+Options:
+  --port <n>     Web UI port (default 3456, env HARNESS_PORT)
+  --home <dir>   Where the world is saved (default ~/.agent-harness, env HARNESS_HOME)
+  --host <addr>  Interface to bind (default 127.0.0.1, env HARNESS_HOST)
+`;
 
-server.tool(
-  "list_agents",
-  "List all agents and their current statuses (pending, running, completed, failed, cancelled).",
-  {},
-  async () => handleListAgents(manager),
-);
+function log(message: string): void {
+  // stdout belongs to the MCP protocol, so everything human-readable goes to stderr.
+  process.stderr.write(`[harness] ${message}\n`);
+}
 
-server.tool(
-  "get_agent_result",
-  "Get the result of an agent by its ID. Returns the full response text, token usage, and status.",
-  GetResultSchema.shape,
-  async (args) => handleGetResult(manager, args),
-);
+function loadDotEnv(): void {
+  for (const file of [join(process.cwd(), ".env"), join(PACKAGE_ROOT, ".env")]) {
+    if (existsSync(file)) {
+      try {
+        process.loadEnvFile(file);
+      } catch (err) {
+        log(`couldn't read ${file}: ${String(err)}`);
+      }
+      return;
+    }
+  }
+}
 
-server.tool(
-  "cancel_agent",
-  "Cancel a running agent by its ID.",
-  CancelAgentSchema.shape,
-  async (args) => handleCancelAgent(manager, args),
-);
+/** Command-line words that aren't flags or flag values. */
+function positionalArgs(): string[] {
+  const args = process.argv.slice(2);
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith("--")) {
+      if (!args[i].includes("=") && ["--port", "--home", "--host"].includes(args[i])) i++;
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
 
-server.tool(
-  "create_template",
-  "Save a reusable agent template with a name, role, and optional model/token settings.",
-  CreateTemplateSchema.shape,
-  async (args) => handleCreateTemplate(manager, args),
-);
+async function findRunningPlayground(baseUrl: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(800) });
+    const body = (await res.json()) as { app?: string };
+    return body.app === APP_ID;
+  } catch {
+    return false;
+  }
+}
 
-server.tool(
-  "list_templates",
-  "List all available agent templates (built-in and custom).",
-  {},
-  async () => handleListTemplates(manager),
-);
+async function startLocal(withUi: boolean): Promise<{ ctx: HarnessContext; shutdown: () => Promise<void> }> {
+  const config = loadConfig();
+  const world = await World.load(config.home, config.defaultModel);
+  const env: EngineEnv = {
+    hasCredentials: config.hasCredentials,
+    claudeBin: config.claudeBin,
+    claudeVersion: await detectClaudeCli(config.claudeBin),
+    home: config.home,
+    bridgeBase: null,
+  };
+  const scheduler = new Scheduler(world, env);
+  const ctx: HarnessContext = { world, scheduler };
 
-// ── Orchestration tools ───────────────────────────────────────────
+  let server: Awaited<ReturnType<typeof startHttpServer>> | null = null;
+  if (withUi) {
+    try {
+      server = await startHttpServer(config, ctx, VERSION);
+      const local = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
+      env.bridgeBase = `http://${local.includes(":") ? `[${local}]` : local}:${config.port}/mcp/agent`;
+      log(`Playground running at http://${local}:${config.port}`);
+    } catch (err) {
+      log(`Couldn't start the web UI on port ${config.port}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  log(`World saved in ${config.home}`);
+  const engine = resolveEngine(world.data.settings.engine, env);
+  if (engine === "claude-code") log(`Agents run on Claude Code ${env.claudeVersion} (your Claude plan).`);
+  else if (engine === "api") log(`Agents run on the Anthropic API (${world.data.settings.defaultModel}).`);
+  else log(engineProblem(world.data.settings.engine, env) ?? "No engine available.");
+  scheduler.start();
 
-server.tool(
-  "start_orchestration",
-  "Start a PM-managed orchestration. Give it a high-level goal and the PM agent will decompose it into sub-tasks, spawn worker agents, monitor them, and synthesize the final result.",
-  StartOrchestrationSchema.shape,
-  async (args) => handleStartOrchestration(orchestrator, args),
-);
+  let closing = false;
+  const shutdown = async () => {
+    if (closing) return;
+    closing = true;
+    scheduler.stop();
+    server?.close();
+    await world.flush();
+  };
+  return { ctx, shutdown };
+}
 
-server.tool(
-  "get_orchestration_status",
-  "Check the status of an orchestration — see the plan, sub-task progress, and final result.",
-  GetOrchestrationSchema.shape,
-  async (args) => handleGetOrchestrationStatus(orchestrator, args),
-);
+function onExit(shutdown: () => Promise<void>): void {
+  const exit = () => {
+    void shutdown().finally(() => process.exit(0));
+  };
+  process.on("SIGINT", exit);
+  process.on("SIGTERM", exit);
+}
 
-server.tool(
-  "list_orchestrations",
-  "List all orchestrations and their current status.",
-  {},
-  async () => handleListOrchestrations(orchestrator),
-);
+async function main(): Promise<void> {
+  loadDotEnv();
+  const command = positionalArgs()[0] ?? "mcp";
 
-server.tool(
-  "cancel_orchestration",
-  "Cancel a running orchestration and all its worker agents.",
-  CancelOrchestrationSchema.shape,
-  async (args) => handleCancelOrchestration(orchestrator, args),
-);
+  if (command === "help" || process.argv.includes("--help")) {
+    process.stderr.write(USAGE);
+    return;
+  }
 
-async function main() {
-  // Start the dashboard HTTP server (uses stderr for logs, won't interfere with stdio)
-  startDashboard({ port: DASHBOARD_PORT, manager, orchestrator });
+  if (command === "serve") {
+    const { shutdown } = await startLocal(true);
+    onExit(shutdown);
+    return;
+  }
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  if (command !== "mcp") {
+    process.stderr.write(`Unknown command: ${command}\n\n${USAGE}`);
+    process.exit(1);
+  }
+
+  const config = loadConfig();
+  const baseUrl = `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`;
+  let mcp;
+  let shutdown = async () => {};
+
+  if (await findRunningPlayground(baseUrl)) {
+    log(`Connected to the playground already running at ${baseUrl}`);
+    mcp = createMcpServer(remoteCaller(baseUrl), VERSION);
+  } else {
+    const local = await startLocal(true);
+    shutdown = local.shutdown;
+    mcp = createMcpServer((name, args) => callMethod(local.ctx, name, args), VERSION);
+  }
+
+  onExit(shutdown);
+  // When the MCP client goes away, save and exit.
+  process.stdin.on("close", () => {
+    void shutdown().finally(() => process.exit(0));
+  });
+  await mcp.connect(new StdioServerTransport());
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  log(`Fatal: ${err instanceof Error ? err.stack : String(err)}`);
   process.exit(1);
 });
