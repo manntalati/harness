@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%238fd16a'/%3E%3Crect x='3' y='5' width='10' height='8' fill='%23d9a866' stroke='%232a2320'/%3E%3Crect x='7' y='9' width='2' height='4' fill='%232a2320'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <div class="brand-name">Harness</div>
+          <div id="world-name" class="world-name"></div>
+        </div>
+      </div>
+
+      <form id="ask" class="ask" autocomplete="off">
+        <textarea id="ask-input" rows="1" placeholder="Give the team a goal…" aria-label="Goal or task for the team"></textarea>
+        <select id="ask-to" aria-label="Send to"></select>
+        <button class="btn primary">Send</button>
+      </form>
+
+      <div class="top-right">
+        <div id="stats" class="stats"></div>
+        <button id="run-toggle" class="run-toggle" type="button"></button>
+        <button id="btn-agent" class="btn" type="button" title="Hire an agent">+ Agent</button>
+        <button id="btn-zone" class="btn" type="button" title="Open a new area (project, repo, or line of work)">+ Area</button>
+        <button id="btn-tasks" class="btn" type="button" title="Task board (t)">Tasks</button>
+        <button id="btn-inbox" class="btn" type="button" title="Inbox (i)">Inbox <span id="inbox-count" class="badge" hidden></span></button>
+        <button id="btn-settings" class="icon-btn big" type="button" title="Settings" aria-label="Settings">⚙</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="stage" class="stage">
+        <canvas id="town" aria-label="Town view of your agents"></canvas>
+        <div id="banner" class="banner" hidden></div>
+        <div class="map-controls">
+          <button id="zoom-in" class="icon-btn" title="Zoom in (+)">+</button>
+          <button id="zoom-out" class="icon-btn" title="Zoom out (-)">−</button>
+          <button id="zoom-fit" class="icon-btn" title="Fit everything (f)">⤢</button>
+        </div>
+        <section id="feed" class="feed">
+          <header>
+            <span>Activity</span>
+            <button id="feed-toggle" class="icon-btn" title="Collapse">▾</button>
+          </header>
+          <ol id="feed-list"></ol>
+        </section>
+        <div class="hint">Click an agent or room · drag to pan · scroll to zoom · double-click to focus</div>
+      </div>
+
+      <aside id="panel" class="panel" hidden>
+        <button id="panel-close" class="icon-btn panel-close" title="Close (Esc)" aria-label="Close">×</button>
+        <div id="panel-content"></div>
+      </aside>
+    </main>
+
+    <div id="modal-root"></div>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

@@ -1,234 +1,176 @@
-# Agent Orchestrator MCP Server
+# Harness
 
-An MCP (Model Context Protocol) server that lets you spin up multiple AI agents, run them concurrently, and monitor everything from a live web dashboard. A built-in **Project Manager agent** can decompose high-level goals into sub-tasks, spawn worker agents, and synthesize results automatically.
+A playground where a team of AI agents researches, builds, and talks things through across all your projects, and you watch it happen in a little pixel-art town.
 
-## Features
+![The town: one room per area, agents at their desks, speech bubbles showing what each one is doing](docs/town.png)
 
-- **Spawn agents on demand** — create agents with custom roles and tasks that run in the background
-- **Project Manager orchestration** — give a high-level goal and the PM decomposes it into parallel sub-tasks
-- **Live dashboard** — web UI at `http://localhost:3456` with real-time status updates via Server-Sent Events
-- **Streaming responses** — agent responses stream in with progress tracking
-- **Cancel anytime** — abort individual agents or entire orchestrations mid-flight
-- **Reusable templates** — built-in templates (researcher, writer, code-reviewer, etc.) and custom ones
+- **Areas** are rooms. Each one is a project or line of work (a research stream, a trading desk, a repo). Point an area at a folder and its agents can read and edit that code.
+- **Agents** live in areas. Click one to see what it's thinking and writing right now, give it a task, message it, or read its history. Hire new agents from templates (researcher, engineer, markets analyst, writer, reviewer, planner, chief of staff) or write your own role.
+- **They work together.** Agents message each other, delegate pieces of work, and wake up when a teammate's result comes back. Envelopes fly across the map when they do.
+- **They report back to you.** Finished work, recommendations, and questions land in your **inbox** (the red mailbox) with action items you can tick off, reply to, or send back for another pass.
+- **Everything persists.** Areas, agents, memories, notes, tasks, and the inbox survive restarts.
 
-## Prerequisites
-
-- **Node.js** >= 18
-- **npm**
-- An **Anthropic API key** ([get one here](https://console.anthropic.com/))
-
-## Setup
-
-### 1. Clone and install
+## Quick start
 
 ```bash
-git clone <repo-url>
-cd mcp
 npm install
 ```
-
-### 2. Set your API key
-
-Create a `.env` file in the project root (already in `.gitignore`):
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Or export it directly:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### 3. Build
 
 ```bash
 npm run build
 ```
 
-### 4. Run
-
 ```bash
 npm start
 ```
 
-The MCP server communicates over **stdio** and the dashboard starts automatically on port **3456**.
+Then open **http://localhost:3456**. You start with a small team: Mira (Chief of Staff, Headquarters), Theo (Researcher), Juno (Engineer), and Rex (Markets Analyst). Type a goal into the bar at the top. It goes to Mira, who plans the work, hands it out, and reports back.
 
-For development with auto-reload:
+## Do I need an API key?
+
+No. There are two ways for agents to think, and the harness picks one automatically:
+
+| Engine | What you need | How it's paid for |
+|---|---|---|
+| **Claude Code** (default when no API key is set) | [Claude Code](https://claude.com/claude-code) installed and logged in with your Claude account (Pro or Max) | Your Claude plan's usage limits; no per-token bill |
+| **Anthropic API** | `ANTHROPIC_API_KEY` in `.env` | Per token, at API prices |
+
+With the Claude Code engine, each time an agent works it runs `claude -p` headlessly in its area's folder, so it gets Claude Code's own file, search, shell, and web tools. Team tools (messaging, delegating, reporting to you) are served to it through a private MCP endpoint on the playground. Things to know:
+
+- Agents share your plan's usage limits with your own Claude use. A busy team can use them up quickly; keep **Agents working at once** low (Settings) on Pro. If a limit is hit, the harness pauses itself and puts the work back in the queue; press **Resume** once the limit resets.
+- The model is whatever your Claude Code uses by default unless you pick one per agent.
+- Agent runs aren't saved as Claude Code sessions (`--no-session-persistence`), so they won't clutter `claude --resume`.
+
+Switch engines any time in **Settings → How agents run**, or with `HARNESS_ENGINE=claude-code|api|auto`.
+
+## Using it
+
+**Give the team a goal.** The bar at the top sends a task to the team lead, or pick any agent or area from the dropdown. Tasks can repeat (every 30 minutes, hourly, daily), which is handy for things like a morning market scan.
+
+**Click around the map.**
+- An **agent** opens its panel: live thinking and output, its queue, and tabs for activity, tasks, messages, memory, and profile. Give it a task, message it, pause it, edit its role or model, or move it to another area.
+- A **room** opens the area: its purpose and folder, team, task board, and notes board. Notes are standing context every agent there reads before it starts work ("use pnpm", "focus on small caps").
+- The **mailbox** opens your inbox. Reply to an agent, tick off action items, or use **Send as task feedback** to get a revised version of a result.
+
+**Add areas and agents.** **+ Area** opens a new room. Give it a purpose, a look, and optionally a folder (any repo on your machine). Turn on **commands** only for folders where you're happy for agents to run tests and builds. **+ Agent** hires someone from a template. Lead agents (Chief of Staff) can also hire specialists and open areas themselves when a goal needs it.
+
+**Work across repos.** Make one area per repo or project. Each area's agents work in its own folder, and they ask teammates in other areas for anything outside it. For example, a Research Lab finds an approach, a Workshop attached to `~/code/bot` implements it, and a Trading Floor analyst checks the numbers.
+
+Keyboard: `/` focus the goal bar · `i` inbox · `t` tasks · `f` fit map · `+`/`-` zoom · `Esc` close.
+
+## Use it from Claude Code (MCP)
+
+The harness is also an MCP server, so you can drive it from a Claude Code session ("have the research lab look into X", "what's in my inbox?").
+
+```bash
+claude mcp add harness -- node /absolute/path/to/harness/dist/index.js mcp
+```
+
+If a playground is already running (`npm start`), the MCP server forwards to it, so Claude Code and the web UI share one live world. Otherwise it starts one, UI included.
+
+For Claude Desktop, add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "harness": {
+      "command": "node",
+      "args": ["/absolute/path/to/harness/dist/index.js", "mcp"]
+    }
+  }
+}
+```
+
+| Tool | What it does |
+|---|---|
+| `harness_overview` | Areas, agents and what they're doing, open tasks, engine status |
+| `assign_task` | Give work to an agent, an area, or (by default) the team lead; optional repeat |
+| `send_message` | Message an agent, an area, or everyone |
+| `get_inbox` | Reports, questions, and results the agents brought back |
+| `iterate_task` | Send a finished task back with feedback for another version |
+| `list_tasks` / `get_task` / `cancel_task` | Track and manage work |
+| `create_area` / `update_area` / `delete_area` | Manage areas, including attaching a repo folder |
+| `create_agent` / `update_agent` / `remove_agent` / `pause_agent` / `get_agent` | Manage the team |
+| `post_note` | Pin standing context on an area's board |
+| `list_templates` | Agent templates and area themes |
+| `set_paused` / `update_settings` | Pause or stop everything, change engine and limits |
+
+## How the agents work
+
+Each agent is persistent: a name, a role (its system prompt), an area, a memory, and a queue. It wakes up when it has a queued task or new messages, works through a tool-use loop, and goes idle again. Every activation starts with a briefing: its area's purpose and folder, who's on the team and what they're doing, the area's notes board, its own memory, its recent work, and whatever woke it.
+
+Team tools every agent has:
+
+| Tool | Purpose |
+|---|---|
+| `send_message` | Talk to a teammate, an area, everyone, or you |
+| `delegate_task` | Hand work to a teammate or area; the result comes back as a message, and the agent picks up where it left off |
+| `complete_task` | Hand over the deliverable for the current task |
+| `report_to_user` | Put a report with action items in your inbox |
+| `post_note` / `remember` | Share context with the area / keep a personal memory |
+| `team_status` | See who's doing what and how delegated work is going |
+| `hire_agent` / `open_area` | Leads only: grow the team |
+
+Plus, depending on the area and agent: file tools scoped to the area's folder (read, search, write, edit), shell commands if the area allows them, and web search and fetch.
+
+### Keeping it under control
+
+A team that talks to itself can run up a bill or chew through a plan, so there are several brakes (all adjustable in Settings):
+
+- **Agents working at once** (default 3). Everything else waits in the queue.
+- **Conversation depth** (default 3). Agent-to-agent replies past this depth are delivered but don't wake the recipient. Delegated results always come back.
+- **Delegation depth** (default 3). How many hand-offs deep a task can go.
+- **Activations per agent per hour** (default 40). A circuit breaker for loops.
+- **Steps per activation** (default 24). Model calls before an agent is stopped.
+- **Pause** stops new work; **Stop all agents now** also interrupts running ones and puts their tasks back in the queue.
+
+File tools can't leave an area's folder (`..` paths, absolute paths, and symlinks pointing outside it are all refused). Shell commands are off unless you turn them on per area. The playground only listens on `127.0.0.1` and rejects requests from other origins.
+
+## Configuration
+
+| Variable | Default | |
+|---|---|---|
+| `HARNESS_ENGINE` | `auto` | `claude-code`, `api`, or `auto` (API if a key is set, else Claude Code) |
+| `ANTHROPIC_API_KEY` | — | Needed only for the API engine |
+| `HARNESS_MODEL` | `claude-opus-5-5` | Default model for the API engine |
+| `CLAUDE_BIN` | `claude` | Path to the Claude Code executable |
+| `HARNESS_PORT` | `3456` | Web UI port (`DASHBOARD_PORT` also works) |
+| `HARNESS_HOME` | `~/.agent-harness` | Where the world is saved (`world.json`) |
+| `HARNESS_HOST` | `127.0.0.1` | Interface to bind. Only change this if you understand that anyone who can reach it can direct your agents |
+
+Put these in a `.env` file in the project folder, or pass `--port`, `--home`, `--host` on the command line. To start fresh, delete `world.json` from the home folder (or point `--home` somewhere new).
+
+## Development
 
 ```bash
 npm run dev
 ```
 
-## Connecting to Claude
-
-### Claude Code
-
-Add the server to your Claude Code MCP settings (`~/.claude/settings.json` or project-level `.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "agent-orchestrator": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp/dist/index.js"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
-    }
-  }
-}
-```
-
-### Claude Desktop
-
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
-```json
-{
-  "mcpServers": {
-    "agent-orchestrator": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp/dist/index.js"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
-    }
-  }
-}
-```
-
-### Testing with the MCP Inspector
-
-```bash
-npx @modelcontextprotocol/inspector node dist/index.js
-```
-
-This opens an interactive UI to test each tool directly.
-
-## Dashboard
-
-Once the server is running, open **http://localhost:3456** in your browser.
-
-The dashboard shows:
-- **Stats bar** — total agents, running, completed, failed counts
-- **Orchestrations** — PM-managed workflows with sub-task progress cards
-- **Agent table** — all agents sorted by status with progress indicators
-- **Event log** — real-time feed of all agent lifecycle events
-- **Result viewer** — click any completed agent or orchestration to read its output
-
-The dashboard port is configurable via the `DASHBOARD_PORT` environment variable (default: `3456`).
-
-## Available MCP Tools
-
-### Agent Management
-
-| Tool | Description |
-|------|-------------|
-| `create_agent` | Spawn a new agent with a name, role (system prompt), and task. Returns an ID immediately. |
-| `list_agents` | List all agents with their current status. |
-| `get_agent_result` | Get the full result of a completed agent by ID. |
-| `cancel_agent` | Cancel a running agent. |
-
-### Orchestration (Project Manager)
-
-| Tool | Description |
-|------|-------------|
-| `start_orchestration` | Give a high-level goal. The PM agent plans sub-tasks, spawns workers, and synthesizes results. |
-| `get_orchestration_status` | Check orchestration progress — plan, sub-task statuses, final result. |
-| `list_orchestrations` | List all orchestrations. |
-| `cancel_orchestration` | Cancel an orchestration and all its worker agents. |
-
-### Templates
-
-| Tool | Description |
-|------|-------------|
-| `create_template` | Save a reusable agent template. |
-| `list_templates` | List built-in and custom templates. |
-
-## Example Usage
-
-Once connected to Claude, you can say things like:
-
-> "Start an orchestration to research the top 5 JavaScript frameworks, compare their pros/cons, and write a recommendation report."
-
-The PM agent will:
-1. Break this into sub-tasks (e.g., "research React", "research Vue", "compare frameworks", "write report")
-2. Spawn worker agents for each
-3. Wait for all to complete
-4. Synthesize a final cohesive report
-
-Monitor it all in real-time at `http://localhost:3456`.
-
-Or for individual agents:
-
-> "Create an agent named 'code-review' with the role of a senior engineer to review this function for bugs..."
-
-## Architecture
-
-```
-                    MCP Client (Claude Code / Desktop)
-                           |  stdio
-                           v
-                    +--------------+
-                    |  MCP Server  |  src/index.ts
-                    +--------------+
-                      |          |
-            +---------+          +-----------+
-            v                                v
-    +---------------+              +------------------+
-    | AgentManager  |<------------>|   Orchestrator   |
-    | (EventEmitter)|  spawns      | (PM Agent Loop)  |
-    +---------------+  agents      +------------------+
-            |                         |
-            v                         v
-    +---------------+         Plan -> Spawn -> Wait -> Synthesize
-    | AgentRunner   |
-    | (streaming)   |
-    +---------------+
-            |
-            v
-    Anthropic Claude API
-
-    +-------------------+
-    | Dashboard (HTTP)  |  port 3456
-    | SSE event stream  |<--- subscribes to AgentManager events
-    | REST API          |
-    | Static HTML/JS    |
-    +-------------------+
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Your Anthropic API key |
-| `DASHBOARD_PORT` | `3456` | Port for the web dashboard |
-
-## Project Structure
+Runs the playground with `tsx`. The frontend in `src/server/public` is plain ES modules with no build step; reload the page after editing. `npm run typecheck` checks the backend.
 
 ```
 src/
-  index.ts                  # Entry point — MCP server + dashboard startup
+  index.ts               CLI: `serve` (playground) and `mcp` (MCP server, proxying to a running playground if any)
+  config.ts              Env/flags, model prices
+  world/
+    types.ts             Areas, agents, tasks, messages, inbox, notes, events
+    world.ts             The world store: mutations, event stream, JSON persistence
+    scheduler.ts         Who works next: queues, concurrency, chatter limits, recurring tasks
+    blueprints.ts        Agent templates, area themes, starter team, sprite looks
   agents/
-    types.ts                # AgentState, events, orchestration types
-    manager.ts              # AgentManager — lifecycle, state, event emitter
-    runner.ts               # Streaming Anthropic API calls
-    orchestrator.ts         # PM agent — plan, execute, synthesize loop
-  tools/
-    create-agent.ts         # create_agent tool handler
-    list-agents.ts          # list_agents tool handler
-    get-result.ts           # get_agent_result tool handler
-    cancel-agent.ts         # cancel_agent tool handler
-    templates.ts            # template tool handlers
-    orchestrate.ts          # orchestration tool handlers
-  templates/
-    defaults.ts             # Built-in agent templates
-  dashboard/
-    server.ts               # HTTP server with SSE + REST API
-    public/
-      index.html            # Dashboard frontend (single-page, no build step)
+    runtime.ts           One activation: briefing → engine loop → deliver results
+    claude-code.ts       Engine: headless Claude Code on your Claude plan
+    bridge.ts            MCP endpoint that gives Claude Code agents their team tools
+    engine.ts            Engine detection and choice
+    tools.ts             Team, workspace, and web tools
+    workspace.ts         Folder-scoped file and shell access
+    prompts.ts           System prompt and per-activation briefing
+  api/
+    methods.ts           Every operation, shared by the web UI and MCP
+    mcp.ts               MCP server (local or proxy)
+  server/
+    http.ts              Static UI, /api/rpc/<method>, /api/state, /events (SSE), agent bridge
+    public/              The town: pixel.js (art), town.js (map, sprites), app.js (panels)
 ```
 
 ## License
