@@ -378,7 +378,7 @@ function failTask(world: World, agent: Agent, task: Task, error: string, progres
 }
 
 /** Sends a finished task's outcome back to whoever asked for it. */
-function deliverResult(
+export function deliverResult(
   world: World,
   agent: Agent,
   task: Task,
