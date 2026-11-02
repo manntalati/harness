@@ -4,7 +4,7 @@ import { Agent, Message, Task } from "./types.js";
 import { Activation, StopRequested, runActivation } from "../agents/runtime.js";
 import { EngineEnv, EngineName, engineProblem, resolveEngine } from "../agents/engine.js";
 
-import { prepareEmailTask } from "../agents/email.js";
+import { prepareEmailTask, pollEmailReplies } from "../agents/email.js";
 
 const TICK_MS = 5000;
 
@@ -34,6 +34,7 @@ export class Scheduler {
   start(): void {
     this.timer = setInterval(() => {
       this.requeueRecurring();
+      void pollEmailReplies(this.world).catch(() => {});
       this.poke();
     }, TICK_MS);
     this.poke();
@@ -84,7 +85,7 @@ export class Scheduler {
     this.assignUnclaimedTasks();
     this.world.emitStats(this.running.size);
     if (w.data.paused) return;
-    // External tasks work even when no Claude engine is installed. Never auto-send email.
+    // External tasks work even when no Claude engine is installed. Email is sent only when a mail transport is configured (see mailer.ts).
     for (const agent of w.data.agents.filter((a) => a.email && a.status !== "paused")) {
       for (const task of w.queuedTasksFor(agent.id)) prepareEmailTask(w, task);
       const messages = w.pendingMessagesFor(agent.id);

@@ -556,7 +556,11 @@ function taskCard(t, opts = {}) {
     if (t.emailHandoff && t.status === "in_progress") {
       const h = t.emailHandoff;
       const mailto = `mailto:${encodeURIComponent(h.to)}?subject=${encodeURIComponent(h.subject)}&body=${encodeURIComponent(h.body)}`;
-      body += `<div class="callout">Email prepared, not sent. Review the destination and body. Sending does not prove acceptance or completion.</div>
+      if (h.sentAt) body += `<div class="callout">Sent automatically ${esc(new Date(h.sentAt).toLocaleString())}. Waiting for the reply; it is picked up from your mailbox and recorded here by itself. You can still record a result manually.</div>
+        <div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>
+        <div class="row-actions"><button class="btn small" data-action="email-result" data-id="${t.id}">Record result manually</button></div>`;
+      else if (h.sendingAt && !h.sendError) body += `<div class="callout">Sending email automatically...</div>`;
+      else body += `${h.sendError ? `<div class="callout error">Automatic send failed: ${esc(h.sendError)}</div>` : ""}<div class="callout">Email prepared, not sent. Review the destination and body. Sending does not prove acceptance or completion.</div>
         <div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>
         <div class="row-actions"><a class="btn small" href="${esc(mailto)}">Open email draft</a><button class="btn small" data-action="email-result" data-id="${t.id}">Record returned result</button></div>`;
     }

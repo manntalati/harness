@@ -179,16 +179,24 @@ MIT
 
 ## External Instinct agent (email handoff)
 
-This is a review-and-send bridge, not a native Instinct API or an unattended email round-trip.
+An external agent is reached by email. With a Gmail app password configured, the round-trip is automatic: assign a task and the harness sends the email, watches your mailbox for the reply, and records it as the task result. Without credentials it falls back to the manual review-and-send flow.
 
-1. Click **+ Agent**, name it **Instinct**, choose an area, and enter your Instinct email address in **External email agent**. Use the address shown in your Instinct contact details. It is stored only in your local `world.json`; do not commit that file.
-2. Assign a task directly to Instinct in the goal bar, agent panel, or MCP `assign_task`. External agents are excluded from automatic area assignment and never start Claude Code or the Anthropic API.
-3. Open the task on the task board. The harness prepares the recipient, subject, task reference, iteration, instructions, and feedback. **Nothing is sent automatically.** Review it and choose **Open email draft**, then send from your email app. For large tasks, copy the displayed subject/body manually if your email app truncates the mailto draft.
-4. Email is a task proposal, not proof of the sender's identity or permission. Confirm sensitive work, messages, spending, or private-data access in your trusted Instinct conversation. This bridge does not establish any permission by itself.
-5. When you receive the result in your Instinct conversation or email, open the task and choose **Record returned result**. Paste the reviewed result. That marks the task done and delivers it to the harness inbox or delegating teammate. Results are recorded through the existing local UI/API; this operation is not exposed as an MCP tool. There is no public callback or automatic mailbox reader.
+1. Click **+ Agent**, name it **Instinct**, choose an area, and enter your Instinct email address in **External email agent**. It is stored only in your local `world.json`; do not commit that file.
+2. Turn on automatic mode. In your Google account enable 2-step verification, create an **app password** (myaccount.google.com/apppasswords), and make sure IMAP is enabled in Gmail settings. Then start the harness with these set in the environment (never in the repo):
 
-A prepared handoff stays `in_progress` across restarts and is not prepared again. It does not mean the email was sent, delivered, accepted, or completed. Cancel stops local tracking, not an email already sent or work already running elsewhere. Repeating tasks require a new review/send each time. Messages sent to the external agent become inbox review items rather than waking a local model. Model, effort, web, and lead controls do not grant capabilities to an email recipient.
+   ```
+   export HARNESS_MAIL_USER=you@gmail.com
+   export HARNESS_MAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"
+   npm start
+   ```
+   Or put them in a git-ignored `.env` and run `node --env-file=.env dist/index.js serve`.
+3. Assign a task to Instinct. The harness emails it from your Gmail with a `[Harness <task id> v<n>]` subject tag. It is sent once; the send is recorded before it happens, so a restart never sends twice.
+4. Every 30 seconds the harness checks your inbox. A reply is accepted only if it comes from the configured agent address, carries that task's tag and iteration, was sent after the task email, and passes sender authentication (DMARC, or DKIM for the agent's domain). Set `HARNESS_MAIL_REQUIRE_AUTH=0` to skip the authentication check. The quoted history is stripped and the rest becomes the task result, delivered to the inbox or delegating teammate. Reply text is stored as data and is never run as an instruction.
+5. **The harness process must stay running** for the reply to be picked up. Tasks stay `in_progress` across restarts and the next poll catches replies that arrived while it was down. After 3 days with no reply you get an inbox note; the task keeps waiting.
+6. If sending fails (bad password, IMAP/SMTP blocked), the task falls back to the manual flow with the error shown and is not retried automatically. **Record result manually** stays available.
 
-MCP setup is also supported via `create_agent` with `email` (and normal name/area/role fields). `get_task` returns the prepared handoff. The destination is intentionally not hardcoded, and no SMTP credentials are needed for this manual handoff.
+Email is a task proposal, not proof of anyone's permission. Confirm sensitive work, spending, or private-data access in your trusted Instinct conversation. Cancel stops local tracking, not an email already sent or work already running elsewhere. Repeating tasks send a new email each iteration. Messages sent to the external agent become inbox review items rather than waking a local model.
+
+MCP setup is also supported via `create_agent` with `email`. `get_task` returns the handoff, including send status.
 
 Run `npm test` for email bridge lifecycle tests, plus `npm run typecheck` and `npm run build`.
