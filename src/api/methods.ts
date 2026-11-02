@@ -6,6 +6,7 @@ import { Scheduler } from "../world/scheduler.js";
 import { AGENT_TEMPLATES, ZONE_THEMES } from "../world/blueprints.js";
 import { Task, ZoneTheme } from "../world/types.js";
 import { MODEL_CHOICES } from "../config.js";
+import { recordEmailResult } from "../agents/email.js";
 import { engineProblem } from "../agents/engine.js";
 
 // One table of operations shared by the web UI (POST /api/rpc/<name>),
@@ -62,6 +63,7 @@ function taskView(ctx: HarnessContext, t: Task, full = false) {
     assignee: t.assigneeId ? w.displayName(t.assigneeId) : null,
     createdBy: w.displayName(t.createdBy),
     iteration: t.iteration,
+    emailHandoff: t.emailHandoff ?? null,
     runs: (t.continuations ?? 0) + 1,
     repeatEveryMinutes: t.repeatEveryMinutes ?? null,
     summary: t.summary ?? null,
@@ -185,6 +187,7 @@ export const METHODS = {
       template: z.string().optional().describe("Template id, e.g. researcher, engineer, markets-analyst, writer, reviewer, planner, chief-of-staff, custom"),
       title: z.string().optional().describe("Job title (defaults to the template's)"),
       role: z.string().optional().describe("Persona / instructions (defaults to the template's)"),
+      email: z.email().optional().describe("External email agent: prepare handoffs for review instead of running a local model"),
       model: z.string().optional().describe("Model id (defaults to the world default)"),
       effort: effortEnum.optional(),
       web_access: z.boolean().optional().describe("Give web search + fetch"),
@@ -196,6 +199,7 @@ export const METHODS = {
         name: a.name,
         zoneId: zoneRef(ctx, a.area).id,
         template: a.template,
+        email: a.email,
         title: a.title,
         role: a.role,
         model: a.model,
@@ -301,7 +305,7 @@ export const METHODS = {
       let agent = a.agent ? agentRef(ctx, a.agent) : undefined;
       let zone = a.area ? zoneRef(ctx, a.area) : undefined;
       if (!agent && !zone) {
-        agent = w.data.agents.find((x) => x.canHire && x.status !== "paused") ?? w.data.agents[0];
+        agent = w.data.agents.find((x) => !x.email && x.canHire && x.status !== "paused") ?? w.data.agents.find((x) => !x.email);
         if (!agent) throw new Error("There are no agents yet. Create one first.");
       }
       zone ??= w.zone(agent!.zoneId)!;
@@ -345,6 +349,18 @@ export const METHODS = {
     handler: (a, ctx) => {
       const task = ctx.world.task(a.task_id);
       if (!task) throw new Error(`Task not found: ${a.task_id}`);
+      return taskView(ctx, task, true);
+    },
+  }),
+
+  record_email_result: method({
+    description: "Record a returned email result after owner review. Does not read email or authenticate its author.",
+    shape: { task_id: z.string(), result: z.string().trim().min(1) },
+    mcp: false,
+    handler: (a, ctx) => {
+      const task = ctx.world.task(a.task_id);
+      if (!task) throw new Error(`Task not found: ${a.task_id}`);
+      recordEmailResult(ctx.world, task, a.result);
       return taskView(ctx, task, true);
     },
   }),
