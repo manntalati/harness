@@ -149,7 +149,9 @@ export class Scheduler {
       return { agentId: agent.id, messages: pending, task: resume };
     }
 
-    const next = w.queuedTasksFor(agent.id)[0];
+    // Finish what was started (e.g. a task continuing after the step limit) before newer work.
+    const queued = w.queuedTasksFor(agent.id);
+    const next = queued.find((t) => t.startedAt) ?? queued[0];
     if (next) return { agentId: agent.id, messages: pending, task: next };
     return undefined;
   }

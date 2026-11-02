@@ -120,6 +120,12 @@ export interface Task {
   feedback?: string;
   previousResult?: string;
   reportedToUser?: boolean;
+  /** Times the agent picked this task back up after a run hit the step limit. */
+  continuations?: number;
+  /** What earlier runs got done before hitting the step limit; shown to the agent when it continues. */
+  progress?: string;
+  /** Claude Code session to resume when the task continues (Claude Code engine). */
+  sessionId?: string;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -197,8 +203,10 @@ export interface WorldSettings {
   defaultModel: string;
   /** How many agents may call the API at the same time. */
   maxConcurrent: number;
-  /** Max model calls in one activation before the agent is stopped. */
+  /** Max model calls in one run; an unfinished task then continues in a fresh run. */
   maxStepsPerActivation: number;
+  /** How many fresh runs a task gets after hitting the step limit before it's handed back to the user. */
+  maxContinuations: number;
   /** Agent-to-agent chatter deeper than this is delivered but doesn't wake the recipient. */
   maxHops: number;
   /** How deep a chain of delegated tasks may go. */

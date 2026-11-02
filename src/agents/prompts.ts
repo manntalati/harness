@@ -141,13 +141,40 @@ export function briefing({ world, agent, zone, task, messages, engine, cwd, resu
     if (task.feedback) parts.push(`\nFeedback to address in this iteration:\n${task.feedback}`);
     if (task.repeatEveryMinutes) parts.push(`\n(This is a recurring task; it runs every ${task.repeatEveryMinutes} minutes. Focus on what changed since last time.)`);
     parts.push("</task>");
-    parts.push(
-      resumed
-        ? "\nYou already started this task earlier (see your delegated work above). Continue from where it stands, and call complete_task when the deliverable is ready."
-        : "\nWork on this task now. Call complete_task with the deliverable when you're done.",
-    );
+    if (task.progress) {
+      parts.push(`\n<progress_so_far>\n${clip(task.progress, 12000)}\n</progress_so_far>`);
+      parts.push(
+        "\nYour earlier run on this task used up its step budget before finishing, so this is a fresh run to continue it. The progress above is what you already did; files you changed are saved. Check the current state where needed, don't redo finished work, and carry on. Call complete_task when the deliverable is ready.",
+      );
+    } else {
+      parts.push(
+        resumed
+          ? "\nYou already started this task earlier (see your delegated work above). Continue from where it stands, and call complete_task when the deliverable is ready."
+          : "\nWork on this task now. Call complete_task with the deliverable when you're done.",
+      );
+    }
   } else {
     parts.push("\nHandle these messages. Act if they need action, reply only if useful, then end your turn.");
+  }
+  return parts.join("\n");
+}
+
+/**
+ * The message that resumes a run which hit the step limit, when the engine
+ * still has the full conversation (API engine in memory, or a resumed
+ * Claude Code session).
+ */
+export function continuationPrompt(world: World, task: Task, messages: Message[], maxSteps: number): string {
+  const parts = [
+    `<harness>You used your ${maxSteps}-step budget for that run before finishing "${task.title}", so the harness paused you and started a fresh run. Pick up exactly where you left off: don't redo finished work, and call complete_task when the deliverable is ready.</harness>`,
+  ];
+  if (messages.length) {
+    parts.push("<new_messages>");
+    for (const m of messages) {
+      const from = m.from === "user" ? "the user" : world.displayName(m.from);
+      parts.push(`[${m.kind === "task_result" ? "task result" : "message"} from ${from}, ${ago(m.createdAt)}]\n${clip(m.content, 12000)}\n`);
+    }
+    parts.push("</new_messages>");
   }
   return parts.join("\n");
 }

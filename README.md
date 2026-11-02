@@ -39,7 +39,7 @@ With the Claude Code engine, each time an agent works it runs `claude -p` headle
 
 - Agents share your plan's usage limits with your own Claude use. A busy team can use them up quickly; keep **Agents working at once** low (Settings) on Pro. If a limit is hit, the harness pauses itself and puts the work back in the queue; press **Resume** once the limit resets.
 - The model is whatever your Claude Code uses by default unless you pick one per agent.
-- Agent runs aren't saved as Claude Code sessions (`--no-session-persistence`), so they won't clutter `claude --resume`.
+- Task runs are saved as Claude Code sessions so a long task can pick up where it left off (see below). They'll show up in `claude --resume` for that folder; quick message-only runs aren't saved.
 
 Switch engines any time in **Settings → How agents run**, or with `HARNESS_ENGINE=claude-code|api|auto`.
 
@@ -121,7 +121,7 @@ A team that talks to itself can run up a bill or chew through a plan, so there a
 - **Conversation depth** (default 3). Agent-to-agent replies past this depth are delivered but don't wake the recipient. Delegated results always come back.
 - **Delegation depth** (default 3). How many hand-offs deep a task can go.
 - **Activations per agent per hour** (default 40). A circuit breaker for loops.
-- **Steps per activation** (default 24). Model calls before an agent is stopped.
+- **Steps per run** (default 50) and **fresh runs per task** (default 5). When an agent uses up its steps partway through a task, it doesn't stop: the harness saves its progress and starts a fresh run that picks up where it left off. With Claude Code it reopens the same session, so the agent keeps everything it had read; with the API it continues the same conversation, or reads a progress summary after a restart. If a task still isn't done after its fresh runs, it comes back to your inbox with the progress so far, and **Iterate** sends it back to keep going.
 - **Pause** stops new work; **Stop all agents now** also interrupts running ones and puts their tasks back in the queue.
 
 File tools can't leave an area's folder (`..` paths, absolute paths, and symlinks pointing outside it are all refused). Shell commands are off unless you turn them on per area. The playground only listens on `127.0.0.1` and rejects requests from other origins.

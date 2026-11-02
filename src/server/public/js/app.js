@@ -393,7 +393,7 @@ const REGIONS = {
       html += `<div class="callout error"><b>Last run failed.</b> ${esc(a.lastError)} <button class="link" data-action="clear-error">Dismiss</button></div>`;
     }
     if (a.status === "working") {
-      html += `<div class="now-line">${task ? `Working on <b>${esc(task.title)}</b>` : partner ? `Talking with <b>${esc(partner.name)}</b>` : "Reading messages"}${a.activityDetail ? `<div class="muted small">${esc(a.activityDetail)}</div>` : ""}</div>`;
+      html += `<div class="now-line">${task ? `Working on <b>${esc(task.title)}</b>${task.continuations ? ` <span class="muted small">(run ${task.continuations + 1})</span>` : ""}` : partner ? `Talking with <b>${esc(partner.name)}</b>` : "Reading messages"}${a.activityDetail ? `<div class="muted small">${esc(a.activityDetail)}</div>` : ""}</div>`;
     } else if (a.status === "paused") {
       html += `<div class="now-line muted">Paused. It won't pick up work until resumed.</div>`;
     } else if (a.status !== "error") {
@@ -540,6 +540,7 @@ function taskCard(t, opts = {}) {
     showZone && z ? z.name : null,
     t.createdBy !== "user" ? `from ${nameOf(t.createdBy)}` : null,
     t.iteration > 1 ? `v${t.iteration}` : null,
+    t.continuations ? `run ${t.continuations + 1}` : null,
     t.repeatEveryMinutes ? `every ${t.repeatEveryMinutes}m` : null,
     ago(t.completedAt ?? t.startedAt ?? t.createdAt),
   ].filter(Boolean);
@@ -550,6 +551,7 @@ function taskCard(t, opts = {}) {
     if (t.feedback) body += `<div class="label">Your feedback</div><div class="md">${markdown(t.feedback)}</div>`;
     if (t.error) body += `<div class="callout error">${esc(t.error)}</div>`;
     if (t.result) body += `<div class="label">Result</div><div class="md">${markdown(t.result)}</div>`;
+    if (t.progress && t.status !== "done") body += `<div class="label">Progress so far</div><pre class="progress">${esc(t.progress)}</pre>`;
     body += `<div class="row-actions">`;
     if (t.status === "queued" || t.status === "in_progress" || t.repeatEveryMinutes) {
       body += `<button class="btn small" data-action="cancel-task" data-id="${t.id}">${t.repeatEveryMinutes && t.status !== "in_progress" ? "Stop repeating" : "Cancel"}</button>`;
@@ -968,7 +970,8 @@ function openSettings() {
         S.data.models.includes(s.defaultModel) ? "" : `<option selected>${esc(s.defaultModel)}</option>`
       }</select><small class="muted">For agents without their own model. Claude Code uses its own default.</small></label>
       ${num("max_concurrent", "Agents working at once", s.maxConcurrent, 1, 16, "More = faster and pricier.")}
-      ${num("max_steps_per_activation", "Steps per activation", s.maxStepsPerActivation, 2, 100, "Model calls before an agent is stopped.")}
+      ${num("max_steps_per_activation", "Steps per run", s.maxStepsPerActivation, 2, 300, "Tool-use steps before an agent pauses and continues in a fresh run.")}
+      ${num("max_continuations", "Fresh runs per task", s.maxContinuations ?? 5, 0, 50, "How many times an unfinished task continues before it comes back to you.")}
       ${num("max_hops", "Conversation depth", s.maxHops, 0, 10, "Agent-to-agent replies that still wake the recipient.")}
       ${num("max_delegation_depth", "Delegation depth", s.maxDelegationDepth, 0, 8, "How many hand-offs deep a task can go.")}
       ${num("max_activations_per_hour", "Activations per agent per hour", s.maxActivationsPerHour, 1, 500, "Circuit breaker against runaway loops.")}
@@ -985,7 +988,7 @@ function openSettings() {
       },
       async onSubmit(fd) {
         const args = { name: fd.get("name"), engine: fd.get("engine"), default_model: fd.get("default_model") };
-        for (const k of ["max_concurrent", "max_steps_per_activation", "max_hops", "max_delegation_depth", "max_activations_per_hour"]) args[k] = Number(fd.get(k));
+        for (const k of ["max_concurrent", "max_steps_per_activation", "max_continuations", "max_hops", "max_delegation_depth", "max_activations_per_hour"]) args[k] = Number(fd.get(k));
         await rpc("update_settings", args);
         await loadState();
         toast("Settings saved");

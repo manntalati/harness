@@ -13,6 +13,8 @@ export interface ToolContext {
   task?: Task;
   /** The task was already started in an earlier activation (e.g. waiting on delegated work). */
   resumed: boolean;
+  /** One line per action taken in this run; becomes the task's progress if the run hits the step limit. */
+  journal: string[];
   /** Conversation depth of whatever woke the agent; outgoing chatter is hops + 1. */
   hops: number;
   signal: AbortSignal;
@@ -443,6 +445,7 @@ export async function executeTool(name: string, input: unknown, ctx: ToolContext
   ctx.world.setAgentState(ctx.agent.id, { activity: toolActivity(name) });
   const result = await runTool(name, input, ctx);
   ctx.world.addAction(ctx.agent.id, result.isError ? "error" : "tool", result.summary);
+  ctx.journal.push(result.summary);
   ctx.world.setAgentState(ctx.agent.id, { activityDetail: result.summary.slice(0, 120) });
   return result;
 }

@@ -62,7 +62,8 @@ export function defaultSettings(defaultModel: string): WorldSettings {
     engine: engine === "api" || engine === "claude-code" ? engine : "auto",
     defaultModel,
     maxConcurrent: 3,
-    maxStepsPerActivation: 24,
+    maxStepsPerActivation: 50,
+    maxContinuations: 5,
     maxHops: 3,
     maxDelegationDepth: 3,
     maxActivationsPerHour: 40,
@@ -193,6 +194,9 @@ export class World {
 
   /** Anything that was mid-flight when the process stopped goes back on the queue. */
   private recoverAfterRestart(): void {
+    // Worlds from before step-limit continuations kept the old 24-step default; give them the new one.
+    const saved = this.data.settings as Partial<WorldSettings>;
+    if (saved.maxContinuations === undefined && saved.maxStepsPerActivation === 24) saved.maxStepsPerActivation = 50;
     // Fill in settings added after this world.json was written.
     this.data.settings = { ...defaultSettings(this.data.settings.defaultModel), ...this.data.settings };
     for (const agent of this.data.agents) {
