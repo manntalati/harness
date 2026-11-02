@@ -176,3 +176,19 @@ src/
 ## License
 
 MIT
+
+## External Instinct agent (email handoff)
+
+This is a review-and-send bridge, not a native Instinct API or an unattended email round-trip.
+
+1. Click **+ Agent**, name it **Instinct**, choose an area, and enter your Instinct email address in **External email agent**. Use the address shown in your Instinct contact details. It is stored only in your local `world.json`; do not commit that file.
+2. Assign a task directly to Instinct in the goal bar, agent panel, or MCP `assign_task`. External agents are excluded from automatic area assignment and never start Claude Code or the Anthropic API.
+3. Open the task on the task board. The harness prepares the recipient, subject, task reference, iteration, instructions, and feedback. **Nothing is sent automatically.** Review it and choose **Open email draft**, then send from your email app. For large tasks, copy the displayed subject/body manually if your email app truncates the mailto draft.
+4. Email is a task proposal, not proof of the sender's identity or permission. Confirm sensitive work, messages, spending, or private-data access in your trusted Instinct conversation. This bridge does not establish any permission by itself.
+5. When you receive the result in your Instinct conversation or email, open the task and choose **Record returned result**. Paste the reviewed result. That marks the task done and delivers it to the harness inbox or delegating teammate. Results are recorded through the existing local UI/API; this operation is not exposed as an MCP tool. There is no public callback or automatic mailbox reader.
+
+A prepared handoff stays `in_progress` across restarts and is not prepared again. It does not mean the email was sent, delivered, accepted, or completed. Cancel stops local tracking, not an email already sent or work already running elsewhere. Repeating tasks require a new review/send each time. Messages sent to the external agent become inbox review items rather than waking a local model. Model, effort, web, and lead controls do not grant capabilities to an email recipient.
+
+MCP setup is also supported via `create_agent` with `email` (and normal name/area/role fields). `get_task` returns the prepared handoff. The destination is intentionally not hardcoded, and no SMTP credentials are needed for this manual handoff.
+
+Run `npm test` for email bridge lifecycle tests, plus `npm run typecheck` and `npm run build`.

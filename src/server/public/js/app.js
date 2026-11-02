@@ -399,7 +399,7 @@ const REGIONS = {
     } else if (a.status !== "error") {
       html += `<div class="now-line muted">${a.activityDetail ? esc(a.activityDetail) : "Idle. Give it a task or send it a message."}</div>`;
     }
-    if (waiting.length) html += `<div class="muted small">Waiting on teammates for: ${waiting.map((t) => `<b>${esc(t.title)}</b>`).join(", ")}</div>`;
+    if (waiting.length) html += `<div class="muted small">Waiting for results for: ${waiting.map((t) => `<b>${esc(t.title)}</b>`).join(", ")}</div>`;
     if (queued.length) html += `<div class="muted small">${queued.length} task${queued.length > 1 ? "s" : ""} queued: ${queued.slice(0, 3).map((t) => esc(t.title)).join(" · ")}</div>`;
     if (a.liveThought?.trim()) {
       html += `<div class="label">Thinking</div><div class="thought">${esc(a.liveThought.slice(-500))}</div>`;
@@ -444,7 +444,8 @@ const REGIONS = {
     // profile
     const st = a.stats;
     return `<dl class="profile">
-      <dt>Model</dt><dd>${esc(a.model || `${S.data.settings.defaultModel} (default)`)}</dd>
+      <dt>Transport</dt><dd>${a.email ? `Email handoff (${esc(a.email)})` : "Local model"}</dd>
+      <dt>Model</dt><dd>${a.email ? "Not used (external email)" : esc(a.model || `${S.data.settings.defaultModel} (default)`)}</dd>
       <dt>Effort</dt><dd>${esc(a.effort ?? "model default")}</dd>
       <dt>Web access</dt><dd>${a.webAccess ? "yes" : "no"}</dd>
       <dt>Can hire</dt><dd>${a.canHire ? "yes" : "no"}</dd>
@@ -552,6 +553,13 @@ function taskCard(t, opts = {}) {
     if (t.error) body += `<div class="callout error">${esc(t.error)}</div>`;
     if (t.result) body += `<div class="label">Result</div><div class="md">${markdown(t.result)}</div>`;
     if (t.progress && t.status !== "done") body += `<div class="label">Progress so far</div><pre class="progress">${esc(t.progress)}</pre>`;
+    if (t.emailHandoff && t.status === "in_progress") {
+      const h = t.emailHandoff;
+      const mailto = `mailto:${encodeURIComponent(h.to)}?subject=${encodeURIComponent(h.subject)}&body=${encodeURIComponent(h.body)}`;
+      body += `<div class="callout">Email prepared, not sent. Review the destination and body. Sending does not prove acceptance or completion.</div>
+        <div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>
+        <div class="row-actions"><a class="btn small" href="${esc(mailto)}">Open email draft</a><button class="btn small" data-action="email-result" data-id="${t.id}">Record returned result</button></div>`;
+    }
     body += `<div class="row-actions">`;
     if (t.status === "queued" || t.status === "in_progress" || t.repeatEveryMinutes) {
       body += `<button class="btn small" data-action="cancel-task" data-id="${t.id}">${t.repeatEveryMinutes && t.status !== "in_progress" ? "Stop repeating" : "Cancel"}</button>`;
@@ -839,6 +847,7 @@ function agentForm(agent, presetZone) {
       <label>Job title<input name="title" maxlength="40" value="${esc(agent?.title ?? "")}"></label>
       <label>Model<select name="model"><option value="">Default (${esc(d.settings.defaultModel)})</option>${d.models.map((m) => `<option value="${m}" ${agent?.model === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
     </div>
+    ${isNew ? `<label>External email agent <span class="muted">(optional)</span><input type="email" name="email" placeholder="Your Instinct email address"></label><p class="muted small">Set an address to use review-and-send email handoffs instead of Claude. No automatic sending or completion. Address stays in your local world, not this repository.</p>` : ""}
     <label>Role & instructions<textarea name="role" rows="6" placeholder="What this agent does, how it works, what it should care about.">${esc(agent?.role ?? "")}</textarea></label>
     <div class="grid2">
       <label>Effort<select name="effort">${["", "low", "medium", "high", "xhigh", "max"].map((e) => `<option value="${e}" ${(agent?.effort ?? "") === e ? "selected" : ""}>${e || "model default"}</option>`).join("")}</select></label>
@@ -887,7 +896,7 @@ function openAgentModal(agent, presetZone) {
         can_hire: fd.get("hire") === "on",
       };
       if (isNew) {
-        const created = await rpc("create_agent", { ...args, template: fd.get("template"), model: args.model || undefined });
+        const created = await rpc("create_agent", { ...args, template: fd.get("template"), email: fd.get("email") || undefined, model: args.model || undefined });
         toast(`${created.name} joined the team`);
         setTimeout(() => select({ type: "agent", id: created.id }), 50);
       } else {
@@ -1131,6 +1140,11 @@ document.addEventListener("click", async (e) => {
     case "task-filter":
       S.taskFilter = el.dataset.filter;
       renderPanel();
+      break;
+    case "email-result":
+      openModal("Record email result", `<p>Review the reply in your email or trusted conversation first. This records your review, not an authenticated automatic callback.</p><textarea name="result" rows="10" required placeholder="Paste the returned result"></textarea>`, {
+        submitLabel: "Record result", onSubmit: async (fd) => { await rpc("record_email_result", { task_id: id, result: fd.get("result") }); },
+      });
       break;
     case "cancel-task":
       await act(() => rpc("cancel_task", { task_id: id }), "Task cancelled");
