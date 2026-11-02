@@ -72,6 +72,8 @@ export interface Agent {
   role: string;
   template?: string;
   zoneId: string;
+  /** External handoff only: never runs through a local model. Address is local world data. */
+  email?: string;
   model?: string;
   effort?: Effort;
   /** Grants Anthropic's server-side web search + web fetch tools. */
@@ -126,6 +128,8 @@ export interface Task {
   progress?: string;
   /** Claude Code session to resume when the task continues (Claude Code engine). */
   sessionId?: string;
+  /** Email was prepared, not necessarily sent or accepted. Survives restart. */
+  emailHandoff?: { to: string; subject: string; body: string; preparedAt: string };
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
