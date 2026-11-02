@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { World } from "../world/world.js";
 import { Agent, Message, Task } from "../world/types.js";
-import { briefing, systemPrompt } from "./prompts.js";
+import { briefing, continuationPrompt, systemPrompt } from "./prompts.js";
 import { ToolContext, executeTool, toolActivity, toolsFor } from "./tools.js";
 import { EngineEnv, EngineName } from "./engine.js";
 import { runClaudeCode } from "./claude-code.js";
@@ -10,6 +10,13 @@ import { EngineResult, StopRequested, UsageLimitReached } from "./errors.js";
 export { StopRequested } from "./errors.js";
 
 const MAX_TOKENS = 32000;
+
+/**
+ * API engine: conversations of runs that hit the step limit, keyed by task id, so the next run
+ * carries on with full context. Lost on restart, in which case the progress notes take over.
+ */
+const pausedConversations = new Map<string, { model: string; conversation: Anthropic.Beta.BetaMessageParam[] }>();
+const MAX_PAUSED_CONVERSATIONS = 20;
 
 export interface Activation {
   agentId: string;
@@ -90,6 +97,7 @@ export async function runActivation(world: World, activation: Activation, signal
     zone,
     task,
     resumed,
+    journal: [],
     hops: messages.length ? Math.max(...messages.map((m) => m.hops)) : 0,
     signal,
     outcome: { reportedToUser: false },
@@ -100,10 +108,7 @@ export async function runActivation(world: World, activation: Activation, signal
       opts.engine === "claude-code"
         ? await runClaudeCode(ctx, messages, opts.env)
         : await runApiLoop(ctx, messages, opts.client());
-    if (result.stepLimitHit) {
-      world.addAction(agent.id, "error", `Stopped after ${world.data.settings.maxStepsPerActivation} steps (the per-activation limit).`);
-    }
-    finishTask(world, agent, ctx, result.finalText, result.stepLimitHit);
+    finishTask(world, agent, ctx, result);
     world.setAgentState(agent.id, { status: "idle", activity: "done", activityDetail: undefined, focus: undefined });
   } catch (err) {
     const stop = err instanceof StopRequested ? err : signal.aborted ? (signal.reason instanceof StopRequested ? signal.reason : new StopRequested(true)) : null;
@@ -141,9 +146,13 @@ async function runApiLoop(ctx: ToolContext, messages: Message[], client: Anthrop
   const { world, agent, zone, task, signal } = ctx;
   const settings = world.data.settings;
   const model = agent.model || settings.defaultModel;
-  const conversation: Anthropic.Beta.BetaMessageParam[] = [
-    { role: "user", content: briefing({ world, agent, zone, task, messages, engine: "api", resumed: ctx.resumed }) },
-  ];
+  const paused = task ? pausedConversations.get(task.id) : undefined;
+  if (task) pausedConversations.delete(task.id);
+  // Same model and still the same piece of work: carry on in the conversation that ran out of steps.
+  const conversation: Anthropic.Beta.BetaMessageParam[] =
+    paused && task && paused.model === model && task.progress
+      ? [...paused.conversation, { role: "user", content: continuationPrompt(world, task, messages, settings.maxStepsPerActivation) }]
+      : [{ role: "user", content: briefing({ world, agent, zone, task, messages, engine: "api", resumed: ctx.resumed }) }];
   const system: Anthropic.Beta.BetaTextBlockParam[] = [
     { type: "text", text: systemPrompt(agent), cache_control: { type: "ephemeral" } },
   ];
@@ -250,6 +259,12 @@ async function runApiLoop(ctx: ToolContext, messages: Message[], client: Anthrop
     }
     conversation.push({ role: "user", content: results });
   }
+  if (task) {
+    pausedConversations.set(task.id, { model, conversation });
+    if (pausedConversations.size > MAX_PAUSED_CONVERSATIONS) {
+      pausedConversations.delete(pausedConversations.keys().next().value!);
+    }
+  }
   return { finalText, stepLimitHit: true };
 }
 
@@ -259,23 +274,46 @@ function openChildren(world: World, taskId: string): Task[] {
   return world.data.tasks.filter((t) => t.parentTaskId === taskId && (t.status === "queued" || t.status === "in_progress"));
 }
 
-function finishTask(world: World, agent: Agent, ctx: ToolContext, finalText: string, stepLimitHit: boolean): void {
+function finishTask(world: World, agent: Agent, ctx: ToolContext, result: EngineResult): void {
   const task = ctx.task ? world.task(ctx.task.id) : undefined;
-  if (!task || task.status !== "in_progress") return;
+  if (result.stepLimitHit && !ctx.outcome.completion) {
+    world.addAction(agent.id, "info", `Used all ${world.data.settings.maxStepsPerActivation} steps for this run.`);
+  }
+  if (!task || task.status !== "in_progress") {
+    if (task) pausedConversations.delete(task.id);
+    return;
+  }
 
   let completion = ctx.outcome.completion;
   if (!completion) {
+    if (result.stepLimitHit) {
+      // Not finished, just out of steps for this run: save where it got to and keep going.
+      const checkpoint = {
+        progress: appendProgress(task.progress, (task.continuations ?? 0) + 1, ctx.journal, result.finalText),
+        sessionId: result.sessionId ?? task.sessionId,
+      };
+      const waiting = openChildren(world, task.id);
+      if (waiting.length) {
+        // Delegated results will resume it (with this checkpoint) when they arrive.
+        world.updateTask(task.id, checkpoint);
+        world.setAgentState(agent.id, { activityDetail: `waiting on ${waiting.map((t) => (t.assigneeId ? world.displayName(t.assigneeId) : "a teammate")).join(", ")}` });
+        return;
+      }
+      continueLater(world, agent, task, checkpoint);
+      return;
+    }
     const waiting = openChildren(world, task.id);
     if (waiting.length) {
       world.addAction(agent.id, "info", `Waiting on ${waiting.length} delegated task(s) before finishing "${task.title}".`);
       world.setAgentState(agent.id, { activityDetail: `waiting on ${waiting.map((t) => (t.assigneeId ? world.displayName(t.assigneeId) : "a teammate")).join(", ")}` });
       return;
     }
-    // The agent ended without calling complete_task: treat its last words as the result.
-    const result = finalText || (stepLimitHit ? "Stopped at the step limit before producing a result." : "Finished without a written result.");
-    completion = { summary: result.split("\n").find((l) => l.trim())?.slice(0, 200) ?? result.slice(0, 200), result };
+    // The agent ended its turn without calling complete_task: treat its last words as the result.
+    const text = result.finalText || "Finished without a written result.";
+    completion = { summary: text.split("\n").find((l) => l.trim())?.slice(0, 200) ?? text.slice(0, 200), result: text };
   }
 
+  pausedConversations.delete(task.id);
   const completedAt = new Date().toISOString();
   world.updateTask(task.id, {
     status: "done",
@@ -284,22 +322,59 @@ function finishTask(world: World, agent: Agent, ctx: ToolContext, finalText: str
     completedAt,
     reportedToUser: ctx.outcome.reportedToUser,
     nextRunAt: task.repeatEveryMinutes ? new Date(Date.now() + task.repeatEveryMinutes * 60_000).toISOString() : undefined,
+    // A recurring task starts its next run fresh.
+    ...(task.repeatEveryMinutes ? { progress: undefined, sessionId: undefined, continuations: undefined } : {}),
   });
   agent.stats.tasksDone++;
   world.log("task", `${agent.name} finished: ${task.title}`, { agentId: agent.id, zoneId: task.zoneId });
   deliverResult(world, agent, task, `Finished "${task.title}".\n\nSummary: ${completion.summary}\n\n${completion.result}`, completion, ctx.outcome.reportedToUser);
 }
 
-function failTask(world: World, agent: Agent, task: Task, error: string): void {
+/** One block of the task's running progress log, written when a run hits the step limit. */
+function appendProgress(existing: string | undefined, run: number, journal: string[], lastText: string): string {
+  const steps = journal.slice(-40).map((line) => `- ${line}`);
+  const omitted = journal.length > 40 ? `- … ${journal.length - 40} earlier steps\n` : "";
+  const block = `Run ${run}:\n${omitted}${steps.join("\n") || "- (no tool calls)"}${lastText ? `\nWhere it left off: ${lastText.slice(0, 1500)}` : ""}`;
+  const all = existing ? `${existing}\n\n${block}` : block;
+  return all.length > 12000 ? `…${all.slice(-12000)}` : all;
+}
+
+/** Re-queues an unfinished task for a fresh run, or hands it back to the user once the runs are used up. */
+function continueLater(world: World, agent: Agent, task: Task, checkpoint: { progress: string; sessionId?: string }): void {
+  const { maxContinuations, maxStepsPerActivation } = world.data.settings;
+  const runs = (task.continuations ?? 0) + 1;
+  if (runs > maxContinuations) {
+    pausedConversations.delete(task.id);
+    world.updateTask(task.id, checkpoint);
+    const total = runs;
+    failTask(
+      world,
+      agent,
+      task,
+      `Not finished after ${total} run${total === 1 ? "" : "s"} of up to ${maxStepsPerActivation} steps each. Use "Iterate" to send it back and keep going (the progress so far is saved), or raise the step limits in Settings.`,
+      checkpoint.progress,
+    );
+    world.addAction(agent.id, "error", `Gave "${task.title}" back to you after ${total} run${total === 1 ? "" : "s"} without finishing.`);
+    return;
+  }
+  // Queued again with startedAt kept, so it's picked up before newer work and briefed as a continuation.
+  world.updateTask(task.id, { ...checkpoint, status: "queued", continuations: runs });
+  world.addAction(agent.id, "info", `Not done yet; continuing "${task.title}" in a fresh run (${runs} of ${maxContinuations}).`);
+  world.log("task", `${agent.name} is continuing "${task.title}" in a fresh run (${runs}/${maxContinuations})`, { agentId: agent.id, zoneId: task.zoneId });
+}
+
+function failTask(world: World, agent: Agent, task: Task, error: string, progress?: string): void {
   const current = world.task(task.id);
   if (!current || current.status !== "in_progress") return;
+  pausedConversations.delete(task.id);
   world.updateTask(task.id, {
     status: "failed",
     error,
     completedAt: new Date().toISOString(),
     nextRunAt: current.repeatEveryMinutes ? new Date(Date.now() + current.repeatEveryMinutes * 60_000).toISOString() : undefined,
   });
-  deliverResult(world, agent, current, `Couldn't finish "${task.title}": ${error}`, undefined, false, error);
+  const detail = progress ? `\n\n### Progress so far\n${progress}` : "";
+  deliverResult(world, agent, current, `Couldn't finish "${task.title}": ${error}${detail}`, undefined, false, error + detail);
 }
 
 /** Sends a finished task's outcome back to whoever asked for it. */

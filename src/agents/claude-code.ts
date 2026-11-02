@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { createInterface } from "node:readline";
 import { Message } from "../world/types.js";
-import { briefing, systemPrompt } from "./prompts.js";
+import { briefing, continuationPrompt, systemPrompt } from "./prompts.js";
 import { ToolContext, toolActivity } from "./tools.js";
 import { closeBridge, openBridge } from "./bridge.js";
 import { EngineEnv } from "./engine.js";
@@ -106,15 +106,27 @@ interface StreamLine {
   };
   message?: { id?: string; content?: { type: string; text?: string; name?: string; input?: Record<string, unknown> }[] };
   mcp_servers?: { name: string; status: string }[];
+  session_id?: string;
   result?: string;
   is_error?: boolean;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   errors?: string[];
 }
 
+interface CliRun {
+  result: StreamLine | null;
+  finalText: string;
+  stepLimitHit: boolean;
+  sessionId?: string;
+  stderr: string;
+  spawnError: Error | null;
+  exitCode: number | null;
+}
+
+const SESSION_GONE = /no conversation found|session .*(not found|does not exist)|could not (find|resume)/i;
+
 export async function runClaudeCode(ctx: ToolContext, messages: Message[], env: EngineEnv): Promise<EngineResult> {
   const { world, agent, zone, task, signal } = ctx;
-  const settings = world.data.settings;
   if (!env.bridgeBase) {
     throw new Error("The playground's web server isn't running, so agents in Claude Code can't reach their team tools. Make sure the port is free and restart the harness.");
   }
@@ -123,125 +135,26 @@ export async function runClaudeCode(ctx: ToolContext, messages: Message[], env: 
 
   const token = openBridge(ctx);
   try {
-    const mcpConfig = JSON.stringify({ mcpServers: { harness: { type: "http", url: `${env.bridgeBase}/${token}` } } });
-    // Only load the built-in tools this agent may use: a smaller toolset means less context on every run.
-    const builtins = ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"];
-    if (agent.webAccess) builtins.push("WebSearch", "WebFetch");
-    if (zone.workspace && zone.allowCommands) builtins.push("Bash");
-
-    const args = [
-      "-p",
-      "--output-format", "stream-json",
-      "--verbose",
-      "--include-partial-messages",
-      "--no-session-persistence",
-      "--append-system-prompt", systemPrompt(agent, "claude-code"),
-      "--mcp-config", mcpConfig,
-      "--strict-mcp-config",
-      // Anything not pre-approved below is denied rather than prompting: nobody is at the keyboard.
-      "--permission-mode", "dontAsk",
-      "--tools", builtins.join(","),
-      "--allowedTools", ["mcp__harness", ...builtins].join(","),
-      ...(agent.model ? ["--model", agent.model] : []),
-      ...(agent.effort ? ["--effort", agent.effort] : []),
-    ];
-
-    // Use the CLI's own login (e.g. a Claude Pro/Max plan) rather than an API key from our environment.
-    const childEnv = { ...process.env };
-    delete childEnv.ANTHROPIC_API_KEY;
-    delete childEnv.ANTHROPIC_AUTH_TOKEN;
-    // The harness may itself run under Claude Code (as an MCP server); each agent is its own session.
-    delete childEnv.CLAUDECODE;
-
-    const child = spawn(env.claudeBin, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
-    let spawnError: Error | null = null;
-    const exited = new Promise<number | null>((resolve) => {
-      child.on("error", (err) => {
-        spawnError = err;
-        resolve(null);
-      });
-      child.on("close", (code) => resolve(code));
-    });
-    let stderr = "";
-    child.stderr.on("data", (d: Buffer) => {
-      stderr = (stderr + d.toString()).slice(-4000);
-    });
-    child.stdin.on("error", () => {});
-    child.stdin.end(briefing({ world, agent, zone, task, messages, engine: "claude-code", cwd, resumed: ctx.resumed }));
-
-    const kill = () => child.kill("SIGTERM");
-    signal.addEventListener("abort", kill);
-    const timer = setTimeout(kill, ACTIVATION_TIMEOUT_MS);
-
-    let finalText = "";
-    let wroteText = false;
-    let result: StreamLine | null = null;
-    let stepLimitHit = false;
-    const toolTurns = new Set<string>();
-
-    try {
-      for await (const line of createInterface({ input: child.stdout })) {
-        let evt: StreamLine;
-        try {
-          evt = JSON.parse(line) as StreamLine;
-        } catch {
-          continue;
-        }
-        if (evt.type === "system" && evt.subtype === "init") {
-          const bridge = evt.mcp_servers?.find((s) => s.name === "harness");
-          if (bridge && bridge.status !== "connected") {
-            world.addAction(agent.id, "error", `Team tools didn't connect (${bridge.status}); this agent can't message or report this time.`);
-          }
-        } else if (evt.type === "stream_event" && evt.event) {
-          const e = evt.event;
-          if (e.type === "content_block_delta" && e.delta?.type === "text_delta" && e.delta.text) {
-            if (agent.activity !== "writing") world.setAgentState(agent.id, { activity: "writing" });
-            world.streamAgent(agent.id, { text: e.delta.text });
-            wroteText = true;
-          } else if (e.type === "content_block_delta" && e.delta?.type === "thinking_delta" && e.delta.thinking) {
-            if (agent.activity !== "thinking") world.setAgentState(agent.id, { activity: "thinking" });
-            world.streamAgent(agent.id, { thought: e.delta.thinking });
-          } else if (e.type === "content_block_start" && e.content_block?.type === "tool_use" && e.content_block.name) {
-            world.setAgentState(agent.id, { activity: activityFor(e.content_block.name) });
-          } else if (e.type === "message_stop" && wroteText) {
-            world.streamAgent(agent.id, { text: "\n\n" });
-            wroteText = false;
-          }
-        } else if (evt.type === "assistant" && evt.message?.content) {
-          for (const block of evt.message.content) {
-            if (block.type === "text" && block.text?.trim()) {
-              finalText = block.text.trim();
-              world.addAction(agent.id, "text", finalText.slice(0, 400));
-            } else if (block.type === "tool_use" && block.name) {
-              toolTurns.add(evt.message.id ?? `${toolTurns.size}`);
-              // Team tools are logged by the bridge when they run.
-              if (!block.name.startsWith("mcp__harness__")) {
-                const summary = describe(block.name, block.input ?? {}, cwd);
-                world.addAction(agent.id, "tool", summary);
-                world.setAgentState(agent.id, { activity: activityFor(block.name), activityDetail: summary.slice(0, 120) });
-              }
-            }
-          }
-          if (toolTurns.size > settings.maxStepsPerActivation && !stepLimitHit) {
-            stepLimitHit = true;
-            kill();
-          }
-        } else if (evt.type === "result") {
-          result = evt;
-        }
+    // A task that ran out of steps last time continues its own Claude Code session, so the agent
+    // keeps everything it read and planned. If that session is gone, start over with a briefing
+    // that includes the progress summary.
+    const resume = task?.sessionId && task.progress ? task.sessionId : undefined;
+    let run = await runCli(ctx, messages, env, cwd, token, resume);
+    if (resume && !run.result?.subtype?.startsWith("success") && !signal.aborted && !run.stepLimitHit) {
+      const problem = [run.result?.result, ...(run.result?.errors ?? []), run.stderr].filter(Boolean).join("\n");
+      if (SESSION_GONE.test(problem) || (!run.result && run.exitCode !== 0)) {
+        world.addAction(agent.id, "info", "Couldn't reopen the earlier session; continuing from the progress notes instead.");
+        run = await runCli(ctx, messages, env, cwd, token, undefined);
       }
-      await exited;
-    } finally {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", kill);
     }
 
     if (signal.aborted) throw signal.reason ?? new StopRequested(true);
-    if (stepLimitHit) return { finalText, stepLimitHit: true };
-    if (spawnError) {
-      throw new Error(`Couldn't start Claude Code (${env.claudeBin}): ${(spawnError as Error).message}. Install it or set CLAUDE_BIN.`);
+    if (run.stepLimitHit) return { finalText: run.finalText, stepLimitHit: true, sessionId: run.sessionId };
+    if (run.spawnError) {
+      throw new Error(`Couldn't start Claude Code (${env.claudeBin}): ${run.spawnError.message}. Install it or set CLAUDE_BIN.`);
     }
 
+    const result = run.result;
     if (result?.usage) {
       // Runs on the user's Claude plan: track tokens, not dollars.
       world.addUsage(agent.id, "claude-code", {
@@ -254,16 +167,138 @@ export async function runClaudeCode(ctx: ToolContext, messages: Message[], env: 
     }
 
     if (result && !result.is_error && result.subtype === "success") {
-      return { finalText: (result.result ?? finalText).trim(), stepLimitHit: false };
+      return { finalText: (result.result ?? run.finalText).trim(), stepLimitHit: false, sessionId: run.sessionId };
     }
-    if (result?.subtype === "error_max_turns") return { finalText, stepLimitHit: true };
+    if (result?.subtype === "error_max_turns") return { finalText: run.finalText, stepLimitHit: true, sessionId: run.sessionId };
 
-    const problem = [result?.result, ...(result?.errors ?? []), stderr].filter(Boolean).join("\n");
+    const problem = [result?.result, ...(result?.errors ?? []), run.stderr].filter(Boolean).join("\n");
     if (USAGE_LIMIT.test(problem)) {
       throw new UsageLimitReached(`Your Claude plan's usage limit was reached (${short(problem, 140)}).`);
     }
-    throw new Error(friendly(problem || `Claude Code exited with code ${await exited}`));
+    throw new Error(friendly(problem || `Claude Code exited with code ${run.exitCode}`));
   } finally {
     closeBridge(token);
   }
+}
+
+/** One `claude -p` process: streams its events into the world and reports how it ended. */
+async function runCli(ctx: ToolContext, messages: Message[], env: EngineEnv, cwd: string, token: string, resume: string | undefined): Promise<CliRun> {
+  const { world, agent, zone, task, signal } = ctx;
+  const settings = world.data.settings;
+  const mcpConfig = JSON.stringify({ mcpServers: { harness: { type: "http", url: `${env.bridgeBase}/${token}` } } });
+  // Only load the built-in tools this agent may use: a smaller toolset means less context on every run.
+  const builtins = ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"];
+  if (agent.webAccess) builtins.push("WebSearch", "WebFetch");
+  if (zone.workspace && zone.allowCommands) builtins.push("Bash");
+
+  const args = [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    // Task runs are kept so a run that hits the step limit can be resumed; message-only runs aren't.
+    ...(task ? [] : ["--no-session-persistence"]),
+    ...(resume ? ["--resume", resume] : []),
+    "--append-system-prompt", systemPrompt(agent, "claude-code"),
+    "--mcp-config", mcpConfig,
+    "--strict-mcp-config",
+    // Anything not pre-approved below is denied rather than prompting: nobody is at the keyboard.
+    "--permission-mode", "dontAsk",
+    "--tools", builtins.join(","),
+    "--allowedTools", ["mcp__harness", ...builtins].join(","),
+    ...(agent.model ? ["--model", agent.model] : []),
+    ...(agent.effort ? ["--effort", agent.effort] : []),
+  ];
+
+  // Use the CLI's own login (e.g. a Claude Pro/Max plan) rather than an API key from our environment.
+  const childEnv = { ...process.env };
+  delete childEnv.ANTHROPIC_API_KEY;
+  delete childEnv.ANTHROPIC_AUTH_TOKEN;
+  // The harness may itself run under Claude Code (as an MCP server); each agent is its own session.
+  delete childEnv.CLAUDECODE;
+
+  const child = spawn(env.claudeBin, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+  const run: CliRun = { result: null, finalText: "", stepLimitHit: false, stderr: "", spawnError: null, exitCode: null };
+  const exited = new Promise<number | null>((resolve) => {
+    child.on("error", (err) => {
+      run.spawnError = err;
+      resolve(null);
+    });
+    child.on("close", (code) => resolve(code));
+  });
+  child.stderr.on("data", (d: Buffer) => {
+    run.stderr = (run.stderr + d.toString()).slice(-4000);
+  });
+  child.stdin.on("error", () => {});
+  const prompt =
+    resume && task
+      ? continuationPrompt(world, task, messages, settings.maxStepsPerActivation)
+      : briefing({ world, agent, zone, task, messages, engine: "claude-code", cwd, resumed: ctx.resumed });
+  child.stdin.end(prompt);
+
+  const kill = () => child.kill("SIGTERM");
+  signal.addEventListener("abort", kill);
+  const timer = setTimeout(kill, ACTIVATION_TIMEOUT_MS);
+  let wroteText = false;
+  const toolTurns = new Set<string>();
+
+  try {
+    for await (const line of createInterface({ input: child.stdout })) {
+      let evt: StreamLine;
+      try {
+        evt = JSON.parse(line) as StreamLine;
+      } catch {
+        continue;
+      }
+      if (evt.type === "system" && evt.subtype === "init") {
+        if (evt.session_id) run.sessionId = evt.session_id;
+        const bridge = evt.mcp_servers?.find((s) => s.name === "harness");
+        if (bridge && bridge.status !== "connected") {
+          world.addAction(agent.id, "error", `Team tools didn't connect (${bridge.status}); this agent can't message or report this time.`);
+        }
+      } else if (evt.type === "stream_event" && evt.event) {
+        const e = evt.event;
+        if (e.type === "content_block_delta" && e.delta?.type === "text_delta" && e.delta.text) {
+          if (agent.activity !== "writing") world.setAgentState(agent.id, { activity: "writing" });
+          world.streamAgent(agent.id, { text: e.delta.text });
+          wroteText = true;
+        } else if (e.type === "content_block_delta" && e.delta?.type === "thinking_delta" && e.delta.thinking) {
+          if (agent.activity !== "thinking") world.setAgentState(agent.id, { activity: "thinking" });
+          world.streamAgent(agent.id, { thought: e.delta.thinking });
+        } else if (e.type === "content_block_start" && e.content_block?.type === "tool_use" && e.content_block.name) {
+          world.setAgentState(agent.id, { activity: activityFor(e.content_block.name) });
+        } else if (e.type === "message_stop" && wroteText) {
+          world.streamAgent(agent.id, { text: "\n\n" });
+          wroteText = false;
+        }
+      } else if (evt.type === "assistant" && evt.message?.content) {
+        for (const block of evt.message.content) {
+          if (block.type === "text" && block.text?.trim()) {
+            run.finalText = block.text.trim();
+            world.addAction(agent.id, "text", run.finalText.slice(0, 400));
+          } else if (block.type === "tool_use" && block.name) {
+            toolTurns.add(evt.message.id ?? `${toolTurns.size}`);
+            // Team tools are logged (and journaled) by the bridge when they run.
+            if (!block.name.startsWith("mcp__harness__")) {
+              const summary = describe(block.name, block.input ?? {}, cwd);
+              world.addAction(agent.id, "tool", summary);
+              ctx.journal.push(summary);
+              world.setAgentState(agent.id, { activity: activityFor(block.name), activityDetail: summary.slice(0, 120) });
+            }
+          }
+        }
+        if (toolTurns.size > settings.maxStepsPerActivation && !run.stepLimitHit) {
+          run.stepLimitHit = true;
+          kill();
+        }
+      } else if (evt.type === "result") {
+        run.result = evt;
+      }
+    }
+    run.exitCode = await exited;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", kill);
+  }
+  return run;
 }
