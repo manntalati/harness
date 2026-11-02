@@ -86,6 +86,7 @@ export interface CreateAgentInput {
   template?: string;
   title?: string;
   role?: string;
+  email?: string;
   model?: string;
   effort?: Effort;
   webAccess?: boolean;
@@ -208,7 +209,7 @@ export class World {
       agent.activityDetail = undefined;
     }
     for (const task of this.data.tasks) {
-      if (task.status === "in_progress") {
+      if (task.status === "in_progress" && !task.emailHandoff) {
         task.status = "queued";
         task.startedAt = undefined;
       }
@@ -500,6 +501,7 @@ export class World {
     if (this.data.agents.length >= this.data.settings.maxAgents) {
       throw new Error(`Agent limit reached (${this.data.settings.maxAgents}).`);
     }
+    if ("email" in input && input.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(input.email).trim())) throw new Error("Invalid external email address");
     const zone = this.zone(input.zoneId);
     if (!zone) throw new Error(`Area not found: ${input.zoneId}`);
     const name = input.name.trim();
@@ -509,7 +511,7 @@ export class World {
       throw new Error(`An agent named "${name}" already exists`);
     }
     const template = getTemplate(input.template) ?? AGENT_TEMPLATES.find((t) => t.id === "custom")!;
-    const role = (input.role ?? template.role).trim();
+    const role = (input.role ?? (input.email ? "External assistant reached through owner-reviewed email handoffs." : template.role)).trim();
     if (!role) throw new Error("Describe the agent's role (what it does and how it works)");
     const agent: Agent = {
       id: newId("agt"),
@@ -518,10 +520,11 @@ export class World {
       role,
       template: template.id,
       zoneId: zone.id,
+      email: input.email?.trim() || undefined,
       model: input.model || undefined,
       effort: input.effort ?? template.effort,
-      webAccess: input.webAccess ?? template.webAccess,
-      canHire: input.canHire ?? template.canHire,
+      webAccess: input.email ? false : input.webAccess ?? template.webAccess,
+      canHire: input.email ? false : input.canHire ?? template.canHire,
       appearance: appearanceFor(name),
       status: "idle",
       activity: "idle",
@@ -541,7 +544,7 @@ export class World {
 
   updateAgent(
     id: string,
-    patch: Partial<Pick<Agent, "name" | "title" | "role" | "zoneId" | "model" | "effort" | "webAccess" | "canHire">>,
+    patch: Partial<Pick<Agent, "name" | "title" | "role" | "zoneId" | "email" | "model" | "effort" | "webAccess" | "canHire">>,
   ): Agent {
     const agent = this.agent(id);
     if (!agent) throw new Error(`Agent not found: ${id}`);
@@ -561,6 +564,7 @@ export class World {
     }
     if (patch.title !== undefined) agent.title = patch.title;
     if (patch.role !== undefined && patch.role.trim()) agent.role = patch.role;
+    if (patch.email !== undefined) agent.email = patch.email.trim() || undefined;
     if (patch.model !== undefined) agent.model = patch.model || undefined;
     if (patch.effort !== undefined) agent.effort = patch.effort;
     if (patch.webAccess !== undefined) agent.webAccess = patch.webAccess;
