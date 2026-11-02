@@ -129,7 +129,12 @@ export interface Task {
   /** Claude Code session to resume when the task continues (Claude Code engine). */
   sessionId?: string;
   /** Email was prepared, not necessarily sent or accepted. Survives restart. */
-  emailHandoff?: { to: string; subject: string; body: string; preparedAt: string };
+  emailHandoff?: {
+    to: string; subject: string; body: string; preparedAt: string;
+    /** Set when a mail transport is configured and the email went out automatically. */
+    sendingAt?: string; sentAt?: string; messageId?: string; sendError?: string;
+    replyMessageId?: string; timeoutNotified?: boolean;
+  };
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
