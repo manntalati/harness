@@ -4,6 +4,8 @@ import { Agent, Message, Task } from "./types.js";
 import { Activation, StopRequested, runActivation } from "../agents/runtime.js";
 import { EngineEnv, EngineName, engineProblem, resolveEngine } from "../agents/engine.js";
 
+import { prepareEmailTask } from "../agents/email.js";
+
 const TICK_MS = 5000;
 
 /**
@@ -82,10 +84,18 @@ export class Scheduler {
     this.assignUnclaimedTasks();
     this.world.emitStats(this.running.size);
     if (w.data.paused) return;
+    // External tasks work even when no Claude engine is installed. Never auto-send email.
+    for (const agent of w.data.agents.filter((a) => a.email && a.status !== "paused")) {
+      for (const task of w.queuedTasksFor(agent.id)) prepareEmailTask(w, task);
+      const messages = w.pendingMessagesFor(agent.id);
+      for (const message of messages) w.addInbox({ kind: "message", agentId: agent.id,
+        title: `Message for ${agent.name}: review needed`, body: message.content });
+      w.markProcessed(agent.id, messages.map((m) => m.id));
+    }
     const engine = this.engine();
     if (!engine) {
       // Leave work queued instead of failing it; the UI explains how to fix this.
-      const hasWork = w.data.agents.some((a) => a.status !== "paused" && this.nextActivation(a));
+      const hasWork = w.data.agents.some((a) => !a.email && a.status !== "paused" && this.nextActivation(a));
       if (hasWork && !this.engineWarned) {
         this.engineWarned = true;
         w.log("error", engineProblem(w.data.settings.engine, this.env) ?? "No engine available.");
@@ -96,7 +106,7 @@ export class Scheduler {
 
     for (const agent of w.data.agents) {
       if (this.running.size >= w.data.settings.maxConcurrent) break;
-      if (agent.status === "paused" || this.running.has(agent.id)) continue;
+      if (agent.email || agent.status === "paused" || this.running.has(agent.id)) continue;
       const activation = this.nextActivation(agent);
       if (!activation) continue;
       if (!this.withinHourlyLimit(agent)) continue;
@@ -161,7 +171,7 @@ export class Scheduler {
     const w = this.world;
     for (const task of w.data.tasks) {
       if (task.status !== "queued" || task.assigneeId) continue;
-      const candidates = w.agentsInZone(task.zoneId).filter((a) => a.status !== "paused" && a.id !== task.createdBy);
+      const candidates = w.agentsInZone(task.zoneId).filter((a) => !a.email && a.status !== "paused" && a.id !== task.createdBy);
       if (!candidates.length) continue;
       const load = (a: Agent) => w.queuedTasksFor(a.id).length + (this.running.has(a.id) ? 1 : 0);
       candidates.sort((a, b) => load(a) - load(b) || Number(a.canHire) - Number(b.canHire));
@@ -203,6 +213,7 @@ export class Scheduler {
         completedAt: undefined,
         nextRunAt: undefined,
         feedback: undefined,
+        emailHandoff: undefined,
       });
       w.log("task", `Recurring task re-queued: ${task.title}`, { zoneId: task.zoneId });
     }
