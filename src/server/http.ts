@@ -8,6 +8,7 @@ import { AGENT_TEMPLATES, ZONE_THEMES } from "../world/blueprints.js";
 import { WorldEvent } from "../world/types.js";
 import { handleBridgeRequest } from "../agents/bridge.js";
 import { engineProblem } from "../agents/engine.js";
+import { mailStatus } from "../agents/mailer.js";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "public");
 const STREAM_FLUSH_MS = 120;
@@ -175,6 +176,7 @@ export function startHttpServer(config: HarnessConfig, ctx: HarnessContext, vers
           claudeCode: scheduler.env.claudeVersion,
           engine: scheduler.engine(),
           engineProblem: engineProblem(world.data.settings.engine, scheduler.env),
+          email: mailStatus(),
           home: config.home,
           version,
         },

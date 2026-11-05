@@ -69,6 +69,7 @@ export function defaultSettings(defaultModel: string): WorldSettings {
     maxActivationsPerHour: 40,
     maxAgents: 30,
     maxZones: 16,
+    maxEmailsPerDay: 40,
   };
 }
 
@@ -105,6 +106,7 @@ export interface CreateTaskInput {
   feedback?: string;
   previousResult?: string;
   iteration?: number;
+  replyAsMessage?: { hops: number };
 }
 
 export interface SendMessageInput {
@@ -691,6 +693,7 @@ export class World {
       iteration: input.iteration ?? 1,
       feedback: input.feedback,
       previousResult: input.previousResult,
+      replyAsMessage: input.replyAsMessage,
       createdAt: now(),
     };
     this.data.tasks.push(task);

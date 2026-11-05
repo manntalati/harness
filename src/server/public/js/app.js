@@ -335,6 +335,7 @@ function renderTop() {
     `<optgroup label="Agents">${d.agents.map((a) => `<option value="agent:${a.id}">${esc(a.name)} · ${esc(a.title)}</option>`).join("")}</optgroup>` +
     `<optgroup label="Areas">${d.zones.map((z) => `<option value="zone:${z.id}">${esc(z.name)}</option>`).join("")}</optgroup>`;
   if ([...sel.options].some((o) => o.value === current)) sel.value = current;
+  renderBanner();
 }
 
 function renderBanner() {
@@ -342,6 +343,11 @@ function renderBanner() {
   if (!S.data) return;
   if (!S.connected && S.everConnected) {
     el.innerHTML = `Lost connection to the harness. Reconnecting…`;
+    el.hidden = false;
+  } else if (!S.data.health.email?.configured && S.data.agents.some((a) => a.email)) {
+    const names = S.data.agents.filter((a) => a.email).map((a) => a.name).join(", ");
+    el.innerHTML = `${esc(names)} ${names.includes(",") ? "work" : "works"} over email, but no email account is connected, so nothing is being sent. <button class="link" data-connect-email>Connect email</button>`;
+    $("[data-connect-email]", el).addEventListener("click", openEmailModal);
     el.hidden = false;
   } else if (S.data.health.engineProblem) {
     el.innerHTML = `${esc(S.data.health.engineProblem)} <button class="link" data-open-settings>Settings</button>`;
@@ -553,17 +559,7 @@ function taskCard(t, opts = {}) {
     if (t.error) body += `<div class="callout error">${esc(t.error)}</div>`;
     if (t.result) body += `<div class="label">Result</div><div class="md">${markdown(t.result)}</div>`;
     if (t.progress && t.status !== "done") body += `<div class="label">Progress so far</div><pre class="progress">${esc(t.progress)}</pre>`;
-    if (t.emailHandoff && t.status === "in_progress") {
-      const h = t.emailHandoff;
-      const mailto = `mailto:${encodeURIComponent(h.to)}?subject=${encodeURIComponent(h.subject)}&body=${encodeURIComponent(h.body)}`;
-      if (h.sentAt) body += `<div class="callout">Sent automatically ${esc(new Date(h.sentAt).toLocaleString())}. Waiting for the reply; it is picked up from your mailbox and recorded here by itself. You can still record a result manually.</div>
-        <div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>
-        <div class="row-actions"><button class="btn small" data-action="email-result" data-id="${t.id}">Record result manually</button></div>`;
-      else if (h.sendingAt && !h.sendError) body += `<div class="callout">Sending email automatically...</div>`;
-      else body += `${h.sendError ? `<div class="callout error">Automatic send failed: ${esc(h.sendError)}</div>` : ""}<div class="callout">Email prepared, not sent. Review the destination and body. Sending does not prove acceptance or completion.</div>
-        <div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>
-        <div class="row-actions"><a class="btn small" href="${esc(mailto)}">Open email draft</a><button class="btn small" data-action="email-result" data-id="${t.id}">Record returned result</button></div>`;
-    }
+    if (t.emailHandoff && t.status === "in_progress") body += emailHandoffBlock(t);
     body += `<div class="row-actions">`;
     if (t.status === "queued" || t.status === "in_progress" || t.repeatEveryMinutes) {
       body += `<button class="btn small" data-action="cancel-task" data-id="${t.id}">${t.repeatEveryMinutes && t.status !== "in_progress" ? "Stop repeating" : "Cancel"}</button>`;
@@ -579,6 +575,32 @@ function taskCard(t, opts = {}) {
   return `<article class="card task ${open ? "open" : ""}">
     <header data-action="toggle" data-id="${t.id}">${taskChip(t.status)}<b>${esc(t.title)}</b><span class="muted small">${esc(meta.join(" · "))}</span></header>
     ${!open && t.summary ? `<div class="summary small">${esc(t.summary)}</div>` : ""}${body}</article>`;
+}
+
+/** What happened to a task's email to an external agent, and what happens next. */
+function emailHandoffBlock(t) {
+  const h = t.emailHandoff;
+  const connected = S.data.health.email?.configured;
+  const time = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const details = `<div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>`;
+  const record = `<button class="btn small ghost" data-action="email-result" data-id="${t.id}">Record a result by hand</button>`;
+  if (h.sentAt) {
+    return `<div class="callout">Emailed ${esc(time(h.sentAt))}. The reply is picked up from your mailbox automatically (checked every 30 seconds) and recorded here.</div>${details}<div class="row-actions">${record}</div>`;
+  }
+  if (h.sendingAt && !h.sendError) return `<div class="callout">Sending…</div>${details}`;
+  if (!connected) {
+    const mailto = `mailto:${encodeURIComponent(h.to)}?subject=${encodeURIComponent(h.subject)}&body=${encodeURIComponent(h.body)}`;
+    return `<div class="callout error"><b>Not sent yet: no email account is connected.</b> Connect one and this goes out automatically, along with anything else waiting. Replies then come back on their own.</div>
+      <div class="row-actions"><button class="btn primary small" data-action="connect-email">Connect email</button></div>${details}
+      <div class="row-actions"><a class="btn small ghost" href="${esc(mailto)}">Send it yourself instead</a>${record}</div>`;
+  }
+  let status;
+  if (h.authFailedVersion !== undefined) status = `<b>The mail server rejected the login.</b> ${esc(h.sendError)} Reconnect the account and it goes out automatically.`;
+  else if (h.retryAt) status = `${esc(h.sendError)} Trying again automatically at ${esc(time(h.retryAt))}.`;
+  else if (h.sendError) status = `<b>Couldn't send:</b> ${esc(h.sendError)}`;
+  else status = "Waiting to send.";
+  return `<div class="callout ${h.authFailedVersion !== undefined || (h.sendError && !h.retryAt) ? "error" : ""}">${status}</div>
+    <div class="row-actions">${h.authFailedVersion !== undefined ? `<button class="btn primary small" data-action="connect-email">Fix email account</button>` : ""}<button class="btn small" data-action="email-retry" data-id="${t.id}">Send now</button>${record}</div>${details}`;
 }
 
 function inboxCard(i) {
@@ -607,6 +629,7 @@ function inboxCard(i) {
       </form>`
           : ""
       }
+      ${/connect email|email login rejected/i.test(i.title) && !S.data.health.email?.configured ? `<div class="row-actions"><button class="btn primary small" data-action="connect-email">Connect email</button></div>` : ""}
       <div class="row-actions end">
         <button class="btn small ghost" data-action="mark-unread" data-id="${i.id}">Mark unread</button>
         <button class="btn small ghost" data-action="archive" data-id="${i.id}" data-archived="${i.archived ? "false" : "true"}">${i.archived ? "Move to inbox" : "Archive"}</button>
@@ -851,7 +874,7 @@ function agentForm(agent, presetZone) {
       <label>Job title<input name="title" maxlength="40" value="${esc(agent?.title ?? "")}"></label>
       <label>Model<select name="model"><option value="">Default (${esc(d.settings.defaultModel)})</option>${d.models.map((m) => `<option value="${m}" ${agent?.model === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
     </div>
-    ${isNew ? `<label>External email agent <span class="muted">(optional)</span><input type="email" name="email" placeholder="Your Instinct email address"></label><p class="muted small">Set an address to use review-and-send email handoffs instead of Claude. No automatic sending or completion. Address stays in your local world, not this repository.</p>` : ""}
+    ${isNew ? `<label>External email agent <span class="muted">(optional)</span><input type="email" name="email" placeholder="Your Instinct email address"></label><p class="muted small">For an agent that lives outside the harness, like Instinct. Its tasks and messages are emailed to this address and its replies come back as results automatically, once an email account is connected in Settings → Email. The address stays in your local world file, not in the repository.</p>` : ""}
     <label>Role & instructions<textarea name="role" rows="6" placeholder="What this agent does, how it works, what it should care about.">${esc(agent?.role ?? "")}</textarea></label>
     <div class="grid2">
       <label>Effort<select name="effort">${["", "low", "medium", "high", "xhigh", "max"].map((e) => `<option value="${e}" ${(agent?.effort ?? "") === e ? "selected" : ""}>${e || "model default"}</option>`).join("")}</select></label>
@@ -988,12 +1011,19 @@ function openSettings() {
       ${num("max_hops", "Conversation depth", s.maxHops, 0, 10, "Agent-to-agent replies that still wake the recipient.")}
       ${num("max_delegation_depth", "Delegation depth", s.maxDelegationDepth, 0, 8, "How many hand-offs deep a task can go.")}
       ${num("max_activations_per_hour", "Activations per agent per hour", s.maxActivationsPerHour, 1, 500, "Circuit breaker against runaway loops.")}
+      ${num("max_emails_per_day", "Emails to external agents per day", s.maxEmailsPerDay ?? 40, 1, 1000, "Brake on automatic email.")}
     </div>
+    <div class="callout email-status"><b>Email</b> (for external agents like Instinct): ${
+      S.data.health.email?.configured
+        ? `connected as <code>${esc(S.data.health.email.user)}</code>${S.data.health.email.source === "env" ? " (from environment variables)" : ""}. Tasks and messages to them are sent automatically.`
+        : "not connected, so their tasks wait instead of being emailed."
+    } <button type="button" class="link" data-email-settings>${S.data.health.email?.configured ? "Change" : "Connect email"}</button></div>
     <div class="callout"><b>Saved in</b> <code>${esc(S.data.health.home)}</code> · v${esc(S.data.health.version)}</div>
     <button type="button" class="btn danger" data-stop-all>Stop all agents now</button>`,
     {
       wide: true,
       onMount(form) {
+        $("[data-email-settings]", form).addEventListener("click", () => openEmailModal());
         $("[data-stop-all]", form).addEventListener("click", async () => {
           await act(() => rpc("set_paused", { paused: true, stop_running: true }), "Stopped all agents and paused the world");
           $("#modal-root").innerHTML = "";
@@ -1001,10 +1031,59 @@ function openSettings() {
       },
       async onSubmit(fd) {
         const args = { name: fd.get("name"), engine: fd.get("engine"), default_model: fd.get("default_model") };
-        for (const k of ["max_concurrent", "max_steps_per_activation", "max_continuations", "max_hops", "max_delegation_depth", "max_activations_per_hour"]) args[k] = Number(fd.get(k));
+        for (const k of ["max_concurrent", "max_steps_per_activation", "max_continuations", "max_hops", "max_delegation_depth", "max_activations_per_hour", "max_emails_per_day"]) args[k] = Number(fd.get(k));
         await rpc("update_settings", args);
         await loadState();
         toast("Settings saved");
+      },
+    },
+  );
+}
+
+function openEmailModal() {
+  const st = S.data.health.email ?? { configured: false };
+  const fromEnv = st.configured && st.source === "env";
+  openModal(
+    "Connect email",
+    `<p>External agents like Instinct are reached by email. Connect the account to send from, and the harness emails their tasks and messages, watches for replies, and records them as results automatically.</p>
+    ${fromEnv ? `<div class="callout">Currently set by environment variables (<code>HARNESS_MAIL_USER</code>), which take priority over anything saved here.</div>` : ""}
+    <div class="grid2">
+      <label>Email address<input name="address" type="email" required value="${esc(st.user ?? "")}" placeholder="you@gmail.com"></label>
+      <label>App password<input name="app_password" type="password" required autocomplete="new-password" placeholder="xxxx xxxx xxxx xxxx"></label>
+    </div>
+    <p class="muted small"><b>Gmail:</b> turn on 2-step verification, create an app password at myaccount.google.com/apppasswords, and make sure IMAP is on in Gmail settings. Your normal password won't work. School and work Microsoft accounts usually block app passwords; a personal Gmail works best.</p>
+    <details><summary class="small">Other provider (custom servers)</summary>
+      <div class="grid2">
+        <label>SMTP server<input name="smtp_host" placeholder="smtp.gmail.com"></label>
+        <label>SMTP port<input name="smtp_port" type="number" placeholder="465"></label>
+        <label>IMAP server<input name="imap_host" placeholder="imap.gmail.com"></label>
+        <label>IMAP port<input name="imap_port" type="number" placeholder="993"></label>
+      </div>
+    </details>
+    <p class="muted small">The harness signs in once to check sending and reading work, then saves the account in <code>${esc(S.data.health.home)}/mail.json</code> (readable only by you), never in the repository.</p>
+    ${st.configured && !fromEnv ? `<button type="button" class="btn ghost danger" data-disconnect>Disconnect ${esc(st.user)}</button>` : ""}`,
+    {
+      submitLabel: "Test & connect",
+      wide: true,
+      onMount(form) {
+        $("[data-disconnect]", form)?.addEventListener("click", async () => {
+          await act(() => rpc("disconnect_email"), "Email disconnected");
+          $("#modal-root").innerHTML = "";
+          await loadState();
+        });
+      },
+      async onSubmit(fd) {
+        const num = (k) => (fd.get(k) ? Number(fd.get(k)) : undefined);
+        const status = await rpc("connect_email", {
+          address: fd.get("address"),
+          app_password: fd.get("app_password"),
+          smtp_host: fd.get("smtp_host") || undefined,
+          smtp_port: num("smtp_port"),
+          imap_host: fd.get("imap_host") || undefined,
+          imap_port: num("imap_port"),
+        });
+        await loadState();
+        toast(`Connected ${status.user}. Waiting emails are going out now.`);
       },
     },
   );
@@ -1144,6 +1223,12 @@ document.addEventListener("click", async (e) => {
     case "task-filter":
       S.taskFilter = el.dataset.filter;
       renderPanel();
+      break;
+    case "connect-email":
+      openEmailModal();
+      break;
+    case "email-retry":
+      await act(() => rpc("retry_email", { task_id: id }), "Sending…");
       break;
     case "email-result":
       openModal("Record email result", `<p>Review the reply in your email or trusted conversation first. This records your review, not an authenticated automatic callback.</p><textarea name="result" rows="10" required placeholder="Paste the returned result"></textarea>`, {

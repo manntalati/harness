@@ -7,6 +7,10 @@ import { World } from "../src/world/world.js";
 import { Scheduler } from "../src/world/scheduler.js";
 import { callMethod } from "../src/api/methods.js";
 import { prepareEmailTask, recordEmailResult } from "../src/agents/email.js";
+import { setMailTransport } from "../src/agents/mailer.js";
+
+// These cover the flow with no email account connected.
+setMailTransport(null);
 
 const env = { hasCredentials: false, claudeBin: "missing", claudeVersion: null, home: "", bridgeBase: null };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30));

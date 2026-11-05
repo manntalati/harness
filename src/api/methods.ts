@@ -6,7 +6,8 @@ import { Scheduler } from "../world/scheduler.js";
 import { AGENT_TEMPLATES, ZONE_THEMES } from "../world/blueprints.js";
 import { Task, ZoneTheme } from "../world/types.js";
 import { MODEL_CHOICES } from "../config.js";
-import { recordEmailResult } from "../agents/email.js";
+import { kickEmail, recordEmailResult, retryEmailNow } from "../agents/email.js";
+import { connectMail, disconnectMail, mailStatus } from "../agents/mailer.js";
 import { engineProblem } from "../agents/engine.js";
 
 // One table of operations shared by the web UI (POST /api/rpc/<name>),
@@ -187,7 +188,7 @@ export const METHODS = {
       template: z.string().optional().describe("Template id, e.g. researcher, engineer, markets-analyst, writer, reviewer, planner, chief-of-staff, custom"),
       title: z.string().optional().describe("Job title (defaults to the template's)"),
       role: z.string().optional().describe("Persona / instructions (defaults to the template's)"),
-      email: z.email().optional().describe("External email agent: prepare handoffs for review instead of running a local model"),
+      email: z.email().optional().describe("External email agent (e.g. Instinct): its tasks and messages are emailed to this address and replies come back as results, instead of running a local model"),
       model: z.string().optional().describe("Model id (defaults to the world default)"),
       effort: effortEnum.optional(),
       web_access: z.boolean().optional().describe("Give web search + fetch"),
@@ -365,6 +366,61 @@ export const METHODS = {
     },
   }),
 
+  retry_email: method({
+    description: "Send a task's email to its external agent now (after checking the Sent folder so it can't go out twice).",
+    shape: { task_id: z.string() },
+    mcp: true,
+    handler: async (a, ctx) => {
+      const task = ctx.world.task(a.task_id);
+      if (!task) throw new Error(`Task not found: ${a.task_id}`);
+      await retryEmailNow(ctx.world, task);
+      return taskView(ctx, task, true);
+    },
+  }),
+
+  email_status: method({
+    description: "Whether an email account is connected for external email agents, and which.",
+    shape: {},
+    mcp: true,
+    handler: () => mailStatus(),
+  }),
+
+  connect_email: method({
+    description: "Connect the email account external agents are reached from. Tests sending and reading before saving it locally.",
+    shape: {
+      address: z.string().describe("Email address to send from"),
+      app_password: z.string().describe("App password for that account (for Gmail: myaccount.google.com/apppasswords)"),
+      from_name: z.string().optional(),
+      smtp_host: z.string().optional(),
+      smtp_port: z.number().int().optional(),
+      imap_host: z.string().optional(),
+      imap_port: z.number().int().optional(),
+    },
+    // Passwords only go through the local UI, never through an MCP client's transcript.
+    mcp: false,
+    handler: async (a, ctx) => {
+      const status = await connectMail({
+        user: a.address,
+        pass: a.app_password,
+        fromName: a.from_name,
+        smtpHost: a.smtp_host,
+        smtpPort: a.smtp_port,
+        imapHost: a.imap_host,
+        imapPort: a.imap_port,
+      });
+      ctx.world.log("system", `Email connected as ${status.user}. Waiting emails will go out now.`);
+      kickEmail(ctx.world);
+      return status;
+    },
+  }),
+
+  disconnect_email: method({
+    description: "Forget the email account saved from the UI.",
+    shape: {},
+    mcp: false,
+    handler: async () => disconnectMail(),
+  }),
+
   cancel_task: method({
     description: "Cancel a queued or running task (also stops a recurring task from repeating).",
     shape: { task_id: z.string() },
@@ -531,6 +587,7 @@ export const METHODS = {
       max_hops: z.number().int().min(0).max(10).optional(),
       max_delegation_depth: z.number().int().min(0).max(8).optional(),
       max_activations_per_hour: z.number().int().min(1).max(500).optional(),
+      max_emails_per_day: z.number().int().min(1).max(1000).optional().describe("Most emails external agents may be sent per 24 hours"),
     },
     mcp: true,
     handler: (a, ctx) => {
@@ -545,6 +602,7 @@ export const METHODS = {
           maxHops: a.max_hops,
           maxDelegationDepth: a.max_delegation_depth,
           maxActivationsPerHour: a.max_activations_per_hour,
+          maxEmailsPerDay: a.max_emails_per_day,
         }).filter(([, v]) => v !== undefined),
       );
       ctx.world.updateSettings(patch);
