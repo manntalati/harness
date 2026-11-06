@@ -4,7 +4,7 @@ import { Agent, Message, Task } from "./types.js";
 import { Activation, StopRequested, runActivation } from "../agents/runtime.js";
 import { EngineEnv, EngineName, engineProblem, resolveEngine } from "../agents/engine.js";
 
-import { prepareEmailTask, pollEmailReplies } from "../agents/email.js";
+import { pollEmailReplies, prepareEmailTask, routeMessagesToEmailAgent } from "../agents/email.js";
 
 const TICK_MS = 5000;
 
@@ -85,13 +85,12 @@ export class Scheduler {
     this.assignUnclaimedTasks();
     this.world.emitStats(this.running.size);
     if (w.data.paused) return;
-    // External tasks work even when no Claude engine is installed. Email is sent only when a mail transport is configured (see mailer.ts).
+    // External (email) agents need no Claude engine. With a mail account connected their tasks and
+    // messages are emailed automatically; see agents/email.ts.
     for (const agent of w.data.agents.filter((a) => a.email && a.status !== "paused")) {
       for (const task of w.queuedTasksFor(agent.id)) prepareEmailTask(w, task);
       const messages = w.pendingMessagesFor(agent.id);
-      for (const message of messages) w.addInbox({ kind: "message", agentId: agent.id,
-        title: `Message for ${agent.name}: review needed`, body: message.content });
-      w.markProcessed(agent.id, messages.map((m) => m.id));
+      if (messages.length) routeMessagesToEmailAgent(w, agent, messages);
     }
     const engine = this.engine();
     if (!engine) {

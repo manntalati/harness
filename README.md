@@ -177,26 +177,25 @@ src/
 
 MIT
 
-## External Instinct agent (email handoff)
+## External agents over email (e.g. Instinct)
 
-An external agent is reached by email. With a Gmail app password configured, the round-trip is automatic: assign a task and the harness sends the email, watches your mailbox for the reply, and records it as the task result. Without credentials it falls back to the manual review-and-send flow.
+Some agents live outside the harness and are reached by email. Once you connect an email account, the round trip is fully automatic: tasks and direct messages for that agent are emailed, its replies are read from your mailbox, and they come back as task results (or as messages to whichever teammate wrote to it).
 
-1. Click **+ Agent**, name it **Instinct**, choose an area, and enter your Instinct email address in **External email agent**. It is stored only in your local `world.json`; do not commit that file.
-2. Turn on automatic mode. In your Google account enable 2-step verification, create an **app password** (myaccount.google.com/apppasswords), and make sure IMAP is enabled in Gmail settings. Then start the harness with these set in the environment (never in the repo):
+1. **Add the agent.** Click **+ Agent**, name it (e.g. **Instinct**), pick an area, and enter its address under **External email agent**. The address is stored only in your local `world.json`.
+2. **Connect the account to send from, once.** Open **Settings → Email → Connect email** (the banner and task cards link there too). For Gmail, turn on 2-step verification, create an app password at myaccount.google.com/apppasswords, and make sure IMAP is on in Gmail settings. The harness signs in to check that sending and reading both work, then saves the account to `~/.agent-harness/mail.json` (readable only by you, never in the repo). Other providers work too via the custom server fields; school and work Microsoft accounts usually block app passwords. Environment variables still work and take priority: `HARNESS_MAIL_USER`, `HARNESS_MAIL_APP_PASSWORD`, optionally `HARNESS_MAIL_FROM_NAME`, `HARNESS_MAIL_SMTP_HOST`/`_PORT`, `HARNESS_MAIL_IMAP_HOST`/`_PORT`.
+3. **That's it.** Anything that was waiting goes out as soon as the account is connected. Each email carries a `[Harness <task id> v<n>]` tag in the subject. Every 30 seconds the harness checks your mailbox (Gmail's All Mail, so replies a filter archived still count). A reply is accepted only if it comes from the agent's address, keeps that task's tag, arrived after the task email, and passes sender authentication (DMARC, or DKIM for the agent's domain; `HARNESS_MAIL_REQUIRE_AUTH=0` turns that check off). The quoted history is stripped and the rest becomes the result. Reply text is stored as data and never run as an instruction.
 
-   ```
-   export HARNESS_MAIL_USER=you@gmail.com
-   export HARNESS_MAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"
-   npm start
-   ```
-   Or put them in a git-ignored `.env` and run `node --env-file=.env dist/index.js serve`.
-3. Assign a task to Instinct. The harness emails it from your Gmail with a `[Harness <task id> v<n>]` subject tag. It is sent once; the send is recorded before it happens, so a restart never sends twice.
-4. Every 30 seconds the harness checks your inbox. A reply is accepted only if it comes from the configured agent address, carries that task's tag and iteration, was sent after the task email, and passes sender authentication (DMARC, or DKIM for the agent's domain). Set `HARNESS_MAIL_REQUIRE_AUTH=0` to skip the authentication check. The quoted history is stripped and the rest becomes the task result, delivered to the inbox or delegating teammate. Reply text is stored as data and is never run as an instruction.
-5. **The harness process must stay running** for the reply to be picked up. Tasks stay `in_progress` across restarts and the next poll catches replies that arrived while it was down. After 3 days with no reply you get an inbox note; the task keeps waiting.
-6. If sending fails (bad password, IMAP/SMTP blocked), the task falls back to the manual flow with the error shown and is not retried automatically. **Record result manually** stays available.
+What happens when things go wrong:
 
-Email is a task proposal, not proof of anyone's permission. Confirm sensitive work, spending, or private-data access in your trusted Instinct conversation. Cancel stops local tracking, not an email already sent or work already running elsewhere. Repeating tasks send a new email each iteration. Messages sent to the external agent become inbox review items rather than waking a local model.
+- **A send fails for a temporary reason** (network, server busy): it retries on its own after 1, 5, 15, 60, 180 and 360 minutes, then tells you.
+- **The login is rejected**: you get an inbox note, and everything waiting goes out as soon as you reconnect the account.
+- **The harness stops mid-send**: on the next start it looks for the email in your Sent folder before deciding to send, so nothing goes out twice. **Send now** on a task does the same check.
+- **Daily limit**: at most 40 emails per 24 hours by default (Settings), as a brake on runaway loops. Over the limit, emails wait until there's room.
+- **No reply after 3 days**: you get an inbox note; the task keeps waiting.
+- **Messages**: a direct message to the agent is emailed, and its reply goes back to the sender as a message, so the usual conversation-depth limit still applies. Broadcasts to an area or "everyone" aren't emailed.
 
-MCP setup is also supported via `create_agent` with `email`. `get_task` returns the handoff, including send status.
+The harness must be running to send and to pick up replies; anything that arrived while it was off is picked up on the next check. You can always **Send it yourself instead** or **Record a result by hand** from the task card. Email is a task proposal, not proof of anyone's permission: confirm sensitive work, spending, or private-data access with Instinct directly. Cancelling a task stops local tracking, not an email already sent. Repeating tasks send a new email each iteration.
 
-Run `npm test` for email bridge lifecycle tests, plus `npm run typecheck` and `npm run build`.
+From MCP: `create_agent` with `email`, `email_status`, `retry_email`, and `get_task` (shows the handoff and send status). Connecting the account is UI-only so the password never passes through a chat transcript.
+
+Run `npm test` for the email lifecycle tests, plus `npm run typecheck` and `npm run build`.

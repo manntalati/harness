@@ -91,7 +91,7 @@ export function briefing({ world, agent, zone, task, messages, engine, cwd, resu
     for (const a of members) {
       const me = a.id === agent.id ? " ← you" : "";
       const doing = a.status === "working" && a.focus?.taskId ? `busy with "${w.task(a.focus.taskId)?.title ?? "a task"}"` : a.status;
-      parts.push(`- ${a.name}, ${a.title} in ${z.name} [${doing}]${a.webAccess ? " (web)" : ""}${z.workspace ? " (has repo access)" : ""}${me}`);
+      parts.push(`- ${a.name}, ${a.title} in ${z.name} [${doing}]${a.email ? " (external, reached by email: replies can take a while)" : a.webAccess ? " (web)" : ""}${z.workspace ? " (has repo access)" : ""}${me}`);
     }
   }
 

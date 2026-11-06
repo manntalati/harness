@@ -134,7 +134,13 @@ export interface Task {
     /** Set when a mail transport is configured and the email went out automatically. */
     sendingAt?: string; sentAt?: string; messageId?: string; sendError?: string;
     replyMessageId?: string; timeoutNotified?: boolean;
+    /** Failed send attempts so far, and when the next automatic retry is due. */
+    attempts?: number; retryAt?: string;
+    /** The login was rejected with this mail account version; retried once the account changes. */
+    authFailedVersion?: number;
   };
+  /** Set when this task carries a message to an external agent: the reply goes back as a message. */
+  replyAsMessage?: { hops: number };
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -224,6 +230,8 @@ export interface WorldSettings {
   maxActivationsPerHour: number;
   maxAgents: number;
   maxZones: number;
+  /** Brake on outgoing email to external agents. */
+  maxEmailsPerDay: number;
 }
 
 export interface WorldData {
@@ -238,6 +246,8 @@ export interface WorldData {
   inbox: InboxItem[];
   notes: Note[];
   log: LogEntry[];
+  /** When emails went out in the last 24 hours (for the daily limit). */
+  emailsSent?: string[];
   createdAt: string;
 }
 

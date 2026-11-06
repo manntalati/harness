@@ -11,6 +11,7 @@ import { HarnessContext, callMethod } from "./api/methods.js";
 import { createMcpServer, remoteCaller } from "./api/mcp.js";
 import { APP_ID, startHttpServer } from "./server/http.js";
 import { EngineEnv, detectClaudeCli, engineProblem, resolveEngine } from "./agents/engine.js";
+import { initMail, mailStatus } from "./agents/mailer.js";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = (JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as { version: string }).version;
@@ -73,6 +74,7 @@ async function findRunningPlayground(baseUrl: string): Promise<boolean> {
 async function startLocal(withUi: boolean): Promise<{ ctx: HarnessContext; shutdown: () => Promise<void> }> {
   const config = loadConfig();
   const world = await World.load(config.home, config.defaultModel);
+  await initMail(config.home);
   const env: EngineEnv = {
     hasCredentials: config.hasCredentials,
     claudeBin: config.claudeBin,
@@ -95,6 +97,9 @@ async function startLocal(withUi: boolean): Promise<{ ctx: HarnessContext; shutd
     }
   }
   log(`World saved in ${config.home}`);
+  const mail = mailStatus();
+  if (mail.configured) log(`Email for external agents: ${mail.user} (${mail.source === "env" ? "from environment" : "saved in Settings"}).`);
+  else if (world.data.agents.some((a) => a.email)) log("External email agents are set up but no email account is connected: connect one in Settings → Email.");
   const engine = resolveEngine(world.data.settings.engine, env);
   if (engine === "claude-code") log(`Agents run on Claude Code ${env.claudeVersion} (your Claude plan).`);
   else if (engine === "api") log(`Agents run on the Anthropic API (${world.data.settings.defaultModel}).`);
