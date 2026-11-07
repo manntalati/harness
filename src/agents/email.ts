@@ -1,7 +1,7 @@
-import { World } from "../world/world.js";
-import { Agent, Message, Task } from "../world/types.js";
+import { World, newId } from "../world/world.js";
+import { Agent, Message, PendingReply, Task } from "../world/types.js";
 import { deliverResult } from "./runtime.js";
-import { MailAuthError, MailTransport, extractReply, getMailTransport, mailVersion } from "./mailer.js";
+import { IncomingMail, MailAuthError, MailTransport, extractReply, getMailTransport, mailVersion } from "./mailer.js";
 
 // External agents (e.g. Instinct) are reached by email. Once a mail account is
 // connected the whole round trip is automatic: the task is emailed, failed sends
@@ -208,53 +208,186 @@ export async function pollEmailReplies(world: World, force = false): Promise<voi
       for (const task of waiting.filter((t) => !t.emailHandoff!.sentAt)) await sendIfDue(world, transport, task);
     }
 
-    // Incoming: one mailbox search per external agent, matched to tasks here.
-    const sent = waiting.filter((t) => t.emailHandoff?.sentAt && t.status === "in_progress");
-    const byAddress = new Map<string, { agent: Agent; tasks: Task[] }>();
-    for (const task of sent) {
-      const agent = world.agent(task.assigneeId);
-      if (!agent?.email) continue;
-      const key = agent.email.toLowerCase();
-      const group = byAddress.get(key) ?? { agent, tasks: [] };
-      group.tasks.push(task);
-      byAddress.set(key, group);
+    // Incoming: one mailbox search covering every external agent, matched to tasks here.
+    const inFlight = world.data.tasks.filter((t) => t.status === "in_progress" && t.emailHandoff?.sentAt);
+    if (!inFlight.length) return;
+    const agents = world.data.agents.filter((a) => a.email && inFlight.some((t) => t.assigneeId === a.id));
+    const addresses = [...new Set(agents.flatMap((a) => [a.email!, ...(a.replyFrom ?? [])].map((x) => x.toLowerCase())))];
+    const oldest = Math.min(...inFlight.map((t) => new Date(t.emailHandoff!.sentAt!).getTime()));
+    let mails: IncomingMail[];
+    try {
+      // IMAP's SINCE only has day precision, so search a day back and filter by time below.
+      mails = await transport.fetchReplies(addresses, new Date(oldest - DAY_MS));
+    } catch (err) {
+      for (const a of agents) world.addAction(a.id, "error", `Mailbox check failed: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`);
+      return;
     }
-    for (const [address, { agent, tasks }] of byAddress) {
-      const since = new Date(Math.min(...tasks.map((t) => new Date(t.emailHandoff!.sentAt!).getTime())) - 3600_000);
-      let mails;
-      try {
-        mails = await transport.fetchReplies(address, "[Harness ", since);
-      } catch (err) {
-        world.addAction(agent.id, "error", `Mailbox check failed: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`);
-        continue;
-      }
-      for (const task of tasks) {
-        const h = task.emailHandoff!;
-        const reply = mails.find((m) => {
-          const ref = REF.exec(m.subject);
-          return m.from === address && m.authenticated && ref?.[1] === task.id && Number(ref[2]) === task.iteration
-            && new Date(m.date).getTime() >= new Date(h.sentAt!).getTime() && m.messageId !== h.messageId;
-        });
-        const text = reply ? extractReply(reply.text) : "";
-        if (reply && text) {
-          setHandoff(world, task, { replyMessageId: reply.messageId });
-          recordEmailResult(world, world.task(task.id)!, text, true);
-          continue;
-        }
-        if (Date.now() - new Date(h.sentAt!).getTime() > TIMEOUT_MS && !h.timeoutNotified) {
-          setHandoff(world, task, { timeoutNotified: true });
-          world.addInbox({
-            kind: "question",
-            agentId: agent.id,
-            taskId: task.id,
-            title: `No reply yet: ${task.title}`,
-            body: "No authenticated reply has arrived after 3 days. The task is still waiting; you can record a result manually or cancel it.",
-          });
-        }
-      }
+    const seen = new Set(world.data.emailSeen ?? []);
+    for (const mail of mails.sort((a, b) => (a.date < b.date ? -1 : 1))) {
+      if (seen.has(mail.messageId) || new Date(mail.date).getTime() < oldest - 5 * 60_000) continue;
+      handleIncoming(world, mail, inFlight);
+      seen.add(mail.messageId);
+      world.data.emailSeen = [...seen].slice(-500);
+      world.scheduleSave();
+    }
+
+    for (const task of inFlight) {
+      const h = world.task(task.id)?.emailHandoff;
+      if (!h || task.status !== "in_progress" || h.timeoutNotified || Date.now() - new Date(h.sentAt!).getTime() < TIMEOUT_MS) continue;
+      setHandoff(world, task, { timeoutNotified: true });
+      world.addInbox({
+        kind: "question",
+        agentId: task.assigneeId!,
+        taskId: task.id,
+        title: `No reply yet: ${task.title}`,
+        body: "Nothing has come back by email after 3 days. The task is still waiting; you can record a result by hand or cancel it.",
+      });
     }
   } finally {
     polling = false;
+  }
+}
+
+/**
+ * One email from (or about) an external agent. A reply that is clearly for a task, from the
+ * agent's address, and authenticated is recorded on its own. Anything else from the agent is
+ * put in the inbox with the reason, so the user can attach it with one click instead of it
+ * being silently dropped.
+ */
+function handleIncoming(world: World, mail: IncomingMail, inFlight: Task[]): void {
+  const live = inFlight.filter((t) => world.task(t.id)?.status === "in_progress");
+  // Which task is it about? Same thread first, then the subject tag.
+  let task = live.find((t) => t.emailHandoff!.messageId && mail.inReplyTo?.includes(t.emailHandoff!.messageId));
+  const ref = REF.exec(mail.subject);
+  let tagNote: string | undefined;
+  if (!task && ref) {
+    task = live.find((t) => t.id === ref[1] && t.iteration === Number(ref[2]));
+    if (!task && world.task(ref[1])) tagNote = `it refers to "${world.task(ref[1])!.title}", which isn't waiting for a reply any more`;
+  }
+  const fromAgent = world.data.agents.find((a) => a.email && (a.email.toLowerCase() === mail.from || a.replyFrom?.includes(mail.from)));
+  const agent = task ? world.agent(task.assigneeId) : fromAgent;
+  if (!agent?.email) return; // tagged mail from someone unrelated, about nothing we're waiting on
+  const text = extractReply(mail.text);
+  const problems: string[] = [];
+  if (task) {
+    const fromOk = mail.from === agent.email.toLowerCase() || (agent.replyFrom ?? []).includes(mail.from);
+    if (!fromOk) problems.push(`it came from ${mail.from} instead of ${agent.email}`);
+    if (!mail.authenticated) problems.push("the sender couldn't be verified (DKIM/DMARC didn't pass)");
+    if (!text) problems.push("it has no new text");
+    if (!problems.length) {
+      setHandoff(world, task, { replyMessageId: mail.messageId, replyIssue: undefined });
+      recordEmailResult(world, world.task(task.id)!, text, true);
+      return;
+    }
+  } else {
+    problems.push(tagNote ?? "it isn't a reply to one of its task emails (no task tag in the subject, not in the same thread)");
+    if (!mail.authenticated) problems.push("the sender couldn't be verified");
+  }
+  const candidates = task ? [task] : live.filter((t) => t.assigneeId === agent.id).sort((a, b) => (a.emailHandoff!.sentAt! < b.emailHandoff!.sentAt! ? 1 : -1));
+  const reason = problems.join(", and ");
+  const pending: PendingReply = {
+    id: newId("rep"),
+    agentId: agent.id,
+    messageId: mail.messageId,
+    from: mail.from,
+    subject: mail.subject,
+    text: text || mail.text.trim(),
+    date: mail.date,
+    reason,
+    taskIds: candidates.map((t) => t.id),
+    createdAt: new Date().toISOString(),
+  };
+  world.data.pendingReplies = [...(world.data.pendingReplies ?? []), pending].slice(-50);
+  if (task) setHandoff(world, task, { replyIssue: reason });
+  world.addInbox({
+    kind: candidates.length ? "question" : "message",
+    agentId: agent.id,
+    taskId: candidates[0]?.id,
+    title: task ? `${agent.name} replied about "${task.title}"` : `Email from ${agent.name}: ${cleanSubject(mail.subject)}`,
+    body: `${pending.text}\n\n---\n*Not recorded automatically because ${reason}.*`,
+    priority: candidates.length ? "high" : "normal",
+    reply: { id: pending.id, from: mail.from, taskIds: pending.taskIds },
+  });
+  world.addAction(agent.id, "info", `Emailed back (${mail.subject || "no subject"}); waiting for you to confirm it in the inbox.`);
+}
+
+function cleanSubject(subject: string): string {
+  const s = subject.replace(/\[Harness [^\]]+\]/g, "").replace(/^\s*((re|fwd?|aw)\s*:\s*)+/i, "").trim();
+  return s || "(no subject)";
+}
+
+/** Records a held-back reply as a task's result, optionally trusting its sender from now on. */
+export function acceptPendingReply(world: World, replyId: string, taskId: string, trustSender: boolean): Task {
+  const pending = (world.data.pendingReplies ?? []).find((p) => p.id === replyId);
+  if (!pending) throw new Error("That reply was already handled");
+  const task = world.task(taskId);
+  if (!task?.emailHandoff || task.status !== "in_progress") throw new Error("That task isn't waiting for a reply any more");
+  const agent = world.agent(task.assigneeId);
+  if (trustSender && agent?.email && pending.from !== agent.email.toLowerCase() && !agent.replyFrom?.includes(pending.from)) {
+    world.updateAgent(agent.id, { replyFrom: [...(agent.replyFrom ?? []), pending.from] });
+  }
+  setHandoff(world, task, { replyMessageId: pending.messageId, replyIssue: undefined });
+  recordEmailResult(world, world.task(task.id)!, pending.text, true);
+  resolvePending(world, replyId);
+  return world.task(task.id)!;
+}
+
+export function dismissPendingReply(world: World, replyId: string): void {
+  if (!(world.data.pendingReplies ?? []).some((p) => p.id === replyId)) throw new Error("That reply was already handled");
+  resolvePending(world, replyId);
+}
+
+function resolvePending(world: World, replyId: string): void {
+  world.data.pendingReplies = (world.data.pendingReplies ?? []).filter((p) => p.id !== replyId);
+  for (const item of world.data.inbox) {
+    if (item.reply?.id === replyId) world.updateInbox(item.id, { read: true, reply: { ...item.reply, resolved: true } });
+  }
+  world.scheduleSave();
+}
+
+/**
+ * External agents do their work elsewhere, so the harness mirrors it on the map: working
+ * (at the desk) while any of their task emails are out, with what they're on, and a
+ * warning bubble when their email can't go out.
+ */
+export function syncEmailAgents(world: World): void {
+  const connected = Boolean(getMailTransport());
+  for (const agent of world.data.agents) {
+    if (!agent.email || agent.status === "paused") continue;
+    const tasks = world.data.tasks
+      .filter((t) => t.assigneeId === agent.id && t.status === "in_progress" && t.emailHandoff)
+      .sort((a, b) => (a.emailHandoff!.preparedAt < b.emailHandoff!.preparedAt ? 1 : -1));
+    let next: Pick<Agent, "status" | "activity" | "activityDetail" | "focus">;
+    if (!tasks.length) {
+      if (agent.status !== "working" && agent.status !== "error") continue;
+      next = { status: "idle", activity: agent.activity === "done" ? "done" : "idle", activityDetail: undefined, focus: undefined };
+    } else {
+      const blocked = (t: Task) => !t.emailHandoff!.sentAt && (!connected || t.emailHandoff!.authFailedVersion !== undefined || Boolean(t.emailHandoff!.sendError && !t.emailHandoff!.retryAt));
+      const answered = tasks.filter((t) => t.emailHandoff!.replyIssue);
+      const waiting = tasks.filter((t) => t.emailHandoff!.sentAt && !t.emailHandoff!.replyIssue);
+      const sending = tasks.filter((t) => !t.emailHandoff!.sentAt && !blocked(t));
+      const stuck = tasks.filter(blocked);
+      const lead = answered[0] ?? waiting[0] ?? sending[0] ?? stuck[0];
+      const more = tasks.length > 1 ? ` (+${tasks.length - 1} more)` : "";
+      let activity: Agent["activity"];
+      let detail: string;
+      if (answered.length) {
+        activity = "reporting";
+        detail = `Replied about "${lead.title}"; confirm it in your inbox`;
+      } else if (waiting.length) {
+        activity = "thinking";
+        detail = `Working on "${lead.title}"${more} (over email)`;
+      } else if (sending.length) {
+        activity = "messaging";
+        detail = `Emailing "${lead.title}"${more}`;
+      } else {
+        activity = "error";
+        detail = connected ? `Can't send "${lead.title}": ${lead.emailHandoff!.sendError ?? "unknown error"}` : "Can't send: no email account connected (Settings → Email)";
+      }
+      next = { status: "working", activity, activityDetail: detail.slice(0, 160), focus: { kind: "task", taskId: lead.id } };
+    }
+    const changed = (Object.keys(next) as (keyof typeof next)[]).some((k) => JSON.stringify(agent[k]) !== JSON.stringify(next[k]));
+    if (changed) world.setAgentState(agent.id, next);
   }
 }
 
@@ -308,8 +441,21 @@ export function recordEmailResult(world: World, task: Task, result: string, auto
       world.addInbox({ kind: "message", agentId: agent.id, taskId: task.id, title: summary.slice(0, 90), body: result });
     } else if (world.agent(task.createdBy)) {
       world.sendMessage({ from: agent.id, to: task.createdBy, content: result, kind: "chat", hops: task.replyAsMessage.hops + 1, taskId: task.id });
+      notifyUser(world, agent, task, result);
     }
     return;
   }
   deliverResult(world, agent, task, `${auto ? "Reply received by email" : "Result recorded by user"} for "${task.title}":\n\n${result}`, { summary, result }, false);
+  if (task.createdBy !== "user") notifyUser(world, agent, task, result);
+}
+
+/** Work an external agent did for a teammate still shows up in the user's inbox. */
+function notifyUser(world: World, agent: Agent, task: Task, result: string): void {
+  world.addInbox({
+    kind: "task_result",
+    agentId: agent.id,
+    taskId: task.id,
+    title: `${agent.name} finished "${task.title}" for ${world.displayName(task.createdBy)}`,
+    body: result,
+  });
 }

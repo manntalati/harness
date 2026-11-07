@@ -6,7 +6,7 @@ import { Scheduler } from "../world/scheduler.js";
 import { AGENT_TEMPLATES, ZONE_THEMES } from "../world/blueprints.js";
 import { Task, ZoneTheme } from "../world/types.js";
 import { MODEL_CHOICES } from "../config.js";
-import { kickEmail, recordEmailResult, retryEmailNow } from "../agents/email.js";
+import { acceptPendingReply, dismissPendingReply, kickEmail, recordEmailResult, retryEmailNow } from "../agents/email.js";
 import { connectMail, disconnectMail, mailStatus } from "../agents/mailer.js";
 import { engineProblem } from "../agents/engine.js";
 
@@ -222,15 +222,20 @@ export const METHODS = {
       effort: effortEnum.optional(),
       web_access: z.boolean().optional(),
       can_hire: z.boolean().optional(),
+      email: z.string().optional().describe("External email agents: the address their tasks are emailed to"),
+      reply_from: z.string().optional().describe("External email agents: other addresses their replies may come from, comma-separated (empty to clear)"),
     },
     mcp: true,
     handler: (a, ctx) => {
       const agent = agentRef(ctx, a.agent);
+      if (a.email !== undefined && agent.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email.trim())) throw new Error("Invalid external email address");
       return ctx.world.updateAgent(agent.id, {
         name: a.name,
         title: a.title,
         role: a.role,
         zoneId: a.area ? zoneRef(ctx, a.area).id : undefined,
+        email: agent.email && a.email !== undefined ? a.email : undefined,
+        replyFrom: a.reply_from === undefined ? undefined : a.reply_from.split(/[\s,;]+/),
         model: a.model,
         effort: a.effort,
         webAccess: a.web_access,
@@ -375,6 +380,27 @@ export const METHODS = {
       if (!task) throw new Error(`Task not found: ${a.task_id}`);
       await retryEmailNow(ctx.world, task);
       return taskView(ctx, task, true);
+    },
+  }),
+
+  accept_email_reply: method({
+    description: "Use an email from an external agent that wasn't recorded automatically as the result of one of its tasks.",
+    shape: {
+      reply_id: z.string(),
+      task_id: z.string(),
+      trust_sender: z.boolean().optional().describe("Also accept future replies from this sender automatically"),
+    },
+    mcp: false,
+    handler: (a, ctx) => taskView(ctx, acceptPendingReply(ctx.world, a.reply_id, a.task_id, a.trust_sender ?? false), true),
+  }),
+
+  dismiss_email_reply: method({
+    description: "Ignore an email from an external agent that wasn't recorded automatically.",
+    shape: { reply_id: z.string() },
+    mcp: false,
+    handler: (a, ctx) => {
+      dismissPendingReply(ctx.world, a.reply_id);
+      return { ok: true };
     },
   }),
 

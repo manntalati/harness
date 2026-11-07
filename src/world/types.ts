@@ -74,6 +74,8 @@ export interface Agent {
   zoneId: string;
   /** External handoff only: never runs through a local model. Address is local world data. */
   email?: string;
+  /** Other addresses this external agent's replies may come from (e.g. a no-reply sender). */
+  replyFrom?: string[];
   model?: string;
   effort?: Effort;
   /** Grants Anthropic's server-side web search + web fetch tools. */
@@ -138,6 +140,8 @@ export interface Task {
     attempts?: number; retryAt?: string;
     /** The login was rejected with this mail account version; retried once the account changes. */
     authFailedVersion?: number;
+    /** Why the last reply for this task wasn't accepted automatically. */
+    replyIssue?: string;
   };
   /** Set when this task carries a message to an external agent: the reply goes back as a message. */
   replyAsMessage?: { hops: number };
@@ -179,6 +183,27 @@ export interface InboxItem {
   priority: Priority;
   read: boolean;
   archived: boolean;
+  createdAt: string;
+  /** An email from an external agent waiting for a one-click decision (see PendingReply). */
+  reply?: { id: string; from: string; taskIds: string[]; resolved?: boolean };
+}
+
+/**
+ * An email from (or about) an external agent that wasn't accepted automatically,
+ * kept so the user can attach it to a task with one click instead of it being lost.
+ */
+export interface PendingReply {
+  id: string;
+  agentId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  text: string;
+  date: string;
+  /** Why it wasn't accepted on its own. */
+  reason: string;
+  /** Tasks it could belong to, best match first. */
+  taskIds: string[];
   createdAt: string;
 }
 
@@ -248,6 +273,10 @@ export interface WorldData {
   log: LogEntry[];
   /** When emails went out in the last 24 hours (for the daily limit). */
   emailsSent?: string[];
+  /** Emails from external agents waiting for the user to attach them to a task. */
+  pendingReplies?: PendingReply[];
+  /** Message-IDs already looked at, so a mailbox poll handles each email once. */
+  emailSeen?: string[];
   createdAt: string;
 }
 

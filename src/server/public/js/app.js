@@ -302,7 +302,8 @@ function connect() {
 function renderTop() {
   const d = S.data;
   $("#world-name").textContent = d.name;
-  document.title = `${d.name} · Harness`;
+  const unreadCount = d.inbox.filter((i) => !i.read && !i.archived).length;
+  document.title = `${unreadCount ? `(${unreadCount}) ` : ""}${d.name} · Harness`;
   const working = d.agents.filter((a) => a.status === "working").length;
   const st = d.stats;
   $("#stats").innerHTML = `
@@ -390,6 +391,7 @@ const REGIONS = {
   },
   "agent-now": () => {
     const a = agentById(S.selection.id);
+    if (a.email) return externalAgentNow(a);
     const task = a.focus?.taskId ? taskById(a.focus.taskId) : null;
     const partner = a.focus?.withAgentId ? agentById(a.focus.withAgentId) : null;
     const queued = S.data.tasks.filter((t) => t.assigneeId === a.id && t.status === "queued");
@@ -509,7 +511,10 @@ const REGIONS = {
   },
   "inbox-head": () => {
     const unread = S.data.inbox.filter((i) => !i.read && !i.archived).length;
-    return `<div class="head-text"><h2>Inbox</h2><div class="sub">${unread ? `${unread} unread` : "All caught up"}</div></div>`;
+    const canAsk = "Notification" in window && Notification.permission === "default";
+    return `<div class="head-text"><h2>Inbox</h2><div class="sub">${unread ? `${unread} unread` : "All caught up"}${
+      canAsk ? ` · <button class="link" data-action="enable-alerts">Get desktop alerts when something arrives</button>` : ""
+    }</div></div>`;
   },
   "inbox-list": () => {
     const f = S.inboxFilter;
@@ -577,6 +582,42 @@ function taskCard(t, opts = {}) {
     ${!open && t.summary ? `<div class="summary small">${esc(t.summary)}</div>` : ""}${body}</article>`;
 }
 
+/** "Now" section for an agent that works outside the harness, reached by email. */
+function externalAgentNow(a) {
+  const tasks = S.data.tasks
+    .filter((t) => t.assigneeId === a.id && t.status === "in_progress" && t.emailHandoff)
+    .sort((x, y) => (x.emailHandoff.preparedAt < y.emailHandoff.preparedAt ? 1 : -1));
+  const queued = S.data.tasks.filter((t) => t.assigneeId === a.id && t.status === "queued");
+  const pending = S.data.inbox.filter((i) => i.agentId === a.id && i.reply && !i.reply.resolved && !i.archived);
+  let html = `<div class="now-line">${
+    a.status === "paused" ? "Paused. New tasks wait until it's resumed." : tasks.length ? `Working on <b>${tasks.length}</b> task${tasks.length > 1 ? "s" : ""} over email` : "Idle. Give it a task or send it a message."
+  }<div class="muted small">Works outside the harness; reached at ${esc(a.email)}${a.replyFrom?.length ? `, replies also accepted from ${esc(a.replyFrom.join(", "))}` : ""}.</div></div>`;
+  if (pending.length) {
+    html += `<div class="callout"><b>${esc(a.name)} emailed back</b> and it needs your OK before it's recorded. <a href="#" data-action="open-inbox-item" data-id="${pending[0].id}">Review in inbox</a></div>`;
+  }
+  if (tasks.length) {
+    html += `<ul class="email-tasks">${tasks
+      .map((t) => {
+        const h = t.emailHandoff;
+        const state = h.replyIssue
+          ? `<span class="chip chip-warn">replied: needs your OK</span>`
+          : h.sentAt
+            ? `<span class="chip chip-working">emailed ${esc(ago(h.sentAt))}, waiting for reply</span>`
+            : h.sendingAt && !h.sendError
+              ? `<span class="chip chip-working">sending</span>`
+              : !S.data.health.email?.configured
+                ? `<span class="chip chip-error">not sent: no email account</span>`
+                : h.retryAt
+                  ? `<span class="chip chip-warn">retrying</span>`
+                  : `<span class="chip chip-error">not sent</span>`;
+        return `<li data-action="open-task" data-id="${t.id}"><b>${esc(t.title)}</b>${state}</li>`;
+      })
+      .join("")}</ul>`;
+  }
+  if (queued.length) html += `<div class="muted small">${queued.length} more queued.</div>`;
+  return html;
+}
+
 /** What happened to a task's email to an external agent, and what happens next. */
 function emailHandoffBlock(t) {
   const h = t.emailHandoff;
@@ -584,6 +625,10 @@ function emailHandoffBlock(t) {
   const time = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const details = `<div class="label">To: ${esc(h.to)}</div><b>${esc(h.subject)}</b><pre class="progress">${esc(h.body)}</pre>`;
   const record = `<button class="btn small ghost" data-action="email-result" data-id="${t.id}">Record a result by hand</button>`;
+  if (h.sentAt && h.replyIssue) {
+    const item = S.data.inbox.find((i) => i.reply && !i.reply.resolved && i.reply.taskIds.includes(t.id));
+    return `<div class="callout"><b>A reply came back</b> but wasn't recorded automatically because ${esc(h.replyIssue)}. ${item ? `<a href="#" data-action="open-inbox-item" data-id="${item.id}">Review it in the inbox</a>` : ""}</div>${details}<div class="row-actions">${record}</div>`;
+  }
   if (h.sentAt) {
     return `<div class="callout">Emailed ${esc(time(h.sentAt))}. The reply is picked up from your mailbox automatically (checked every 30 seconds) and recorded here.</div>${details}<div class="row-actions">${record}</div>`;
   }
@@ -601,6 +646,18 @@ function emailHandoffBlock(t) {
   else status = "Waiting to send.";
   return `<div class="callout ${h.authFailedVersion !== undefined || (h.sendError && !h.retryAt) ? "error" : ""}">${status}</div>
     <div class="row-actions">${h.authFailedVersion !== undefined ? `<button class="btn primary small" data-action="connect-email">Fix email account</button>` : ""}<button class="btn small" data-action="email-retry" data-id="${t.id}">Send now</button>${record}</div>${details}`;
+}
+
+/** Buttons for an email from an external agent that is waiting for the user's decision. */
+function replyActions(i) {
+  const agent = agentById(i.agentId);
+  const tasks = i.reply.taskIds.map(taskById).filter((t) => t && t.status === "in_progress");
+  const trusted = agent && (agent.email?.toLowerCase() === i.reply.from || agent.replyFrom?.includes(i.reply.from));
+  return `<div class="reply-actions">
+    ${tasks.length ? `<div class="label">Use this email as the result of</div>${tasks.map((t) => `<button class="btn primary small" data-action="accept-reply" data-reply="${i.reply.id}" data-task="${t.id}">${esc(t.title)}</button>`).join("")}` : `<p class="muted small">None of ${esc(agent?.name ?? "its")} tasks are waiting for a reply right now.</p>`}
+    ${tasks.length && !trusted ? `<label class="check small"><input type="checkbox" data-trust="${i.reply.id}"> Always accept replies from ${esc(i.reply.from)}</label>` : ""}
+    <div class="row-actions"><button class="btn small ghost" data-action="dismiss-reply" data-reply="${i.reply.id}">Ignore this email</button></div>
+  </div>`;
 }
 
 function inboxCard(i) {
@@ -629,6 +686,7 @@ function inboxCard(i) {
       </form>`
           : ""
       }
+      ${i.reply && !i.reply.resolved ? replyActions(i) : ""}
       ${/connect email|email login rejected/i.test(i.title) && !S.data.health.email?.configured ? `<div class="row-actions"><button class="btn primary small" data-action="connect-email">Connect email</button></div>` : ""}
       <div class="row-actions end">
         <button class="btn small ghost" data-action="mark-unread" data-id="${i.id}">Mark unread</button>
@@ -786,7 +844,10 @@ function refreshPanel() {
   for (const el of $$("[data-keep]")) kept.set(el.dataset.keep, el.value);
   for (const el of $$("[data-region]", $("#panel-content"))) {
     const name = el.dataset.region;
-    if (el.contains(document.activeElement) && document.activeElement !== document.body) continue;
+    // Don't redraw under someone who's typing; a clicked button losing focus is fine.
+    const active = document.activeElement;
+    const typing = active && (active.tagName === "TEXTAREA" || active.tagName === "SELECT" || (active.tagName === "INPUT" && !["checkbox", "radio", "button", "submit"].includes(active.type)));
+    if (typing && el.contains(active)) continue;
     const html = REGIONS[name]();
     if (S.regionCache.get(name) === html) continue;
     S.regionCache.set(name, html);
@@ -874,6 +935,10 @@ function agentForm(agent, presetZone) {
       <label>Job title<input name="title" maxlength="40" value="${esc(agent?.title ?? "")}"></label>
       <label>Model<select name="model"><option value="">Default (${esc(d.settings.defaultModel)})</option>${d.models.map((m) => `<option value="${m}" ${agent?.model === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
     </div>
+    ${!isNew && agent.email ? `<div class="grid2">
+      <label>Email address<input type="email" name="email" required value="${esc(agent.email)}"></label>
+      <label>Replies may also come from <span class="muted">(optional)</span><input name="reply_from" value="${esc((agent.replyFrom ?? []).join(", "))}" placeholder="e.g. noreply@instinct.example"></label>
+    </div>` : ""}
     ${isNew ? `<label>External email agent <span class="muted">(optional)</span><input type="email" name="email" placeholder="Your Instinct email address"></label><p class="muted small">For an agent that lives outside the harness, like Instinct. Its tasks and messages are emailed to this address and its replies come back as results automatically, once an email account is connected in Settings → Email. The address stays in your local world file, not in the repository.</p>` : ""}
     <label>Role & instructions<textarea name="role" rows="6" placeholder="What this agent does, how it works, what it should care about.">${esc(agent?.role ?? "")}</textarea></label>
     <div class="grid2">
@@ -922,6 +987,10 @@ function openAgentModal(agent, presetZone) {
         web_access: fd.get("web") === "on",
         can_hire: fd.get("hire") === "on",
       };
+      if (!isNew && agent.email) {
+        args.email = fd.get("email");
+        args.reply_from = fd.get("reply_from") ?? "";
+      }
       if (isNew) {
         const created = await rpc("create_agent", { ...args, template: fd.get("template"), email: fd.get("email") || undefined, model: args.model || undefined });
         toast(`${created.name} joined the team`);
@@ -1109,6 +1178,20 @@ function toast(text, kind = "info", onClick) {
 
 function notifyInbox(item) {
   const a = agentById(item.agentId);
+  // A system notification when the tab is in the background, if the user allowed it.
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    try {
+      const n = new Notification(`${a?.name ?? "An agent"}: ${item.title}`, { body: item.body.replace(/[#*_`>]/g, "").slice(0, 180), tag: item.id });
+      n.onclick = () => {
+        window.focus();
+        S.expanded.add(item.id);
+        rpc("update_inbox_item", { item_id: item.id, read: true }).catch(() => {});
+        select({ type: "inbox" });
+      };
+    } catch {
+      // Some browsers only allow notifications from a service worker; the toast still shows.
+    }
+  }
   toast({ html: `${avatar(a, 22)}<span><b>${esc(a?.name ?? "An agent")}</b> ${esc(item.title)}</span>` }, "inbox", () => {
     S.expanded.add(item.id);
     rpc("update_inbox_item", { item_id: item.id, read: true }).catch(() => {});
@@ -1223,6 +1306,31 @@ document.addEventListener("click", async (e) => {
     case "task-filter":
       S.taskFilter = el.dataset.filter;
       renderPanel();
+      break;
+    case "accept-reply": {
+      const trust = $(`input[data-trust="${el.dataset.reply}"]`)?.checked ?? false;
+      await act(() => rpc("accept_email_reply", { reply_id: el.dataset.reply, task_id: el.dataset.task, trust_sender: trust }), "Recorded as the result");
+      break;
+    }
+    case "dismiss-reply":
+      await act(() => rpc("dismiss_email_reply", { reply_id: el.dataset.reply }));
+      break;
+    case "open-inbox-item":
+      S.expanded.add(id);
+      rpc("update_inbox_item", { item_id: id, read: true }).catch(() => {});
+      select({ type: "inbox" });
+      break;
+    case "open-task":
+      S.expanded.add(id);
+      S.taskFilter = "open";
+      select({ type: "tasks" });
+      break;
+    case "enable-alerts":
+      Notification.requestPermission().then((p) => {
+        toast(p === "granted" ? "Desktop alerts on" : "Desktop alerts weren't allowed; you can change that in your browser's site settings");
+        S.regionCache.clear();
+        refreshPanel();
+      });
       break;
     case "connect-email":
       openEmailModal();

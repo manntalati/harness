@@ -126,6 +126,7 @@ export interface InboxInput {
   actionItems?: string[];
   priority?: Priority;
   taskId?: string;
+  reply?: InboxItem["reply"];
 }
 
 type Listener = (event: WorldEvent) => void;
@@ -546,7 +547,7 @@ export class World {
 
   updateAgent(
     id: string,
-    patch: Partial<Pick<Agent, "name" | "title" | "role" | "zoneId" | "email" | "model" | "effort" | "webAccess" | "canHire">>,
+    patch: Partial<Pick<Agent, "name" | "title" | "role" | "zoneId" | "email" | "replyFrom" | "model" | "effort" | "webAccess" | "canHire">>,
   ): Agent {
     const agent = this.agent(id);
     if (!agent) throw new Error(`Agent not found: ${id}`);
@@ -567,6 +568,11 @@ export class World {
     if (patch.title !== undefined) agent.title = patch.title;
     if (patch.role !== undefined && patch.role.trim()) agent.role = patch.role;
     if (patch.email !== undefined) agent.email = patch.email.trim() || undefined;
+    if (patch.replyFrom !== undefined) {
+      const list = [...new Set(patch.replyFrom.map((a) => a.trim().toLowerCase()).filter(Boolean))];
+      for (const a of list) if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a)) throw new Error(`Not an email address: ${a}`);
+      agent.replyFrom = list.length ? list : undefined;
+    }
     if (patch.model !== undefined) agent.model = patch.model || undefined;
     if (patch.effort !== undefined) agent.effort = patch.effort;
     if (patch.webAccess !== undefined) agent.webAccess = patch.webAccess;
@@ -785,6 +791,7 @@ export class World {
       read: false,
       archived: false,
       createdAt: now(),
+      reply: input.reply,
     };
     this.data.inbox.push(item);
     this.emit({ type: "inbox", item });
@@ -793,11 +800,12 @@ export class World {
     return item;
   }
 
-  updateInbox(id: string, patch: Partial<Pick<InboxItem, "read" | "archived">> & { toggleAction?: number }): InboxItem {
+  updateInbox(id: string, patch: Partial<Pick<InboxItem, "read" | "archived" | "reply">> & { toggleAction?: number }): InboxItem {
     const item = this.data.inbox.find((i) => i.id === id);
     if (!item) throw new Error(`Inbox item not found: ${id}`);
     if (patch.read !== undefined) item.read = patch.read;
     if (patch.archived !== undefined) item.archived = patch.archived;
+    if (patch.reply !== undefined) item.reply = patch.reply;
     if (patch.toggleAction !== undefined && item.actionItems[patch.toggleAction]) {
       item.actionItems[patch.toggleAction].done = !item.actionItems[patch.toggleAction].done;
     }

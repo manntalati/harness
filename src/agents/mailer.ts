@@ -17,11 +17,21 @@ import { join } from "node:path";
  * <HARNESS_HOME>/mail.json (owner-only permissions). Never in world.json or the repo.
  */
 export interface OutgoingMail { to: string; subject: string; body: string }
-export interface IncomingMail { messageId: string; from: string; subject: string; text: string; date: string; authenticated: boolean }
+export interface IncomingMail {
+  messageId: string;
+  from: string;
+  subject: string;
+  text: string;
+  date: string;
+  /** DMARC passed, or DKIM passed for the sender's own domain. */
+  authenticated: boolean;
+  /** Message-IDs this email replies to (In-Reply-To and References), for matching replies that lost the subject tag. */
+  inReplyTo?: string[];
+}
 export interface MailTransport {
   send(mail: OutgoingMail): Promise<{ messageId: string }>;
-  /** Recent messages from one sender whose subject contains `subjectHint`. */
-  fetchReplies(fromAddress: string, subjectHint: string, since: Date): Promise<IncomingMail[]>;
+  /** Recent mail from any of these senders, or with a harness tag in the subject (not counting mail we sent). */
+  fetchReplies(fromAddresses: string[], since: Date): Promise<IncomingMail[]>;
   /** Message-ID of a sent message whose subject contains `subjectTag`, if one is in the Sent folder. */
   findSent?(subjectTag: string, since: Date): Promise<string | null>;
 }
@@ -259,28 +269,33 @@ function mailTransport(s: MailSettings, requireAuth: boolean): MailTransport {
       }
     },
 
-    async fetchReplies(fromAddress, subjectHint, since) {
+    async fetchReplies(fromAddresses, since) {
       const { simpleParser } = await import("mailparser");
       return withImap(s, async (client) => {
         const found: IncomingMail[] = [];
         const folder = (await searchFolder(client, "\\All")) ?? "INBOX";
         const lock = await client.getMailboxLock(folder, { readOnly: true });
         try {
-          const uids = (await client.search({ since, from: fromAddress, subject: subjectHint }, { uid: true })) || [];
-          for (const uid of uids.slice(-40)) {
+          const any = [...fromAddresses.map((from) => ({ from })), { subject: "[Harness " }];
+          const uids = (await client.search({ since, or: any }, { uid: true })) || [];
+          for (const uid of uids.slice(-60)) {
             const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
             if (!msg || !msg.source) continue;
             const parsed = await simpleParser(msg.source);
-            const auth = String(parsed.headers.get("authentication-results") ?? "");
-            const domain = fromAddress.split("@")[1]?.toLowerCase() ?? "";
-            const authenticated = !requireAuth || /dmarc=pass/i.test(auth) || (/dkim=pass/i.test(auth) && auth.toLowerCase().includes(domain));
+            const from = (parsed.from?.value[0]?.address ?? "").toLowerCase();
+            if (!from || from === s.user.toLowerCase()) continue; // our own outgoing mail
+            const auth = String(parsed.headers.get("authentication-results") ?? "").toLowerCase();
+            const domain = from.split("@")[1] ?? "";
+            const authenticated = !requireAuth || /dmarc=pass/.test(auth) || (/dkim=pass/.test(auth) && auth.includes(domain));
+            const refs = parsed.references ? (Array.isArray(parsed.references) ? parsed.references : [parsed.references]) : [];
             found.push({
               messageId: String(parsed.messageId ?? `uid-${uid}`),
-              from: (parsed.from?.value[0]?.address ?? "").toLowerCase(),
+              from,
               subject: parsed.subject ?? "",
               text: parsed.text ?? "",
               date: (parsed.date ?? new Date()).toISOString(),
               authenticated,
+              inReplyTo: [...(parsed.inReplyTo ? [parsed.inReplyTo] : []), ...refs].map(String),
             });
           }
         } finally {

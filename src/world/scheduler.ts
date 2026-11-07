@@ -4,7 +4,7 @@ import { Agent, Message, Task } from "./types.js";
 import { Activation, StopRequested, runActivation } from "../agents/runtime.js";
 import { EngineEnv, EngineName, engineProblem, resolveEngine } from "../agents/engine.js";
 
-import { pollEmailReplies, prepareEmailTask, routeMessagesToEmailAgent } from "../agents/email.js";
+import { pollEmailReplies, prepareEmailTask, routeMessagesToEmailAgent, syncEmailAgents } from "../agents/email.js";
 
 const TICK_MS = 5000;
 
@@ -84,6 +84,8 @@ export class Scheduler {
     const w = this.world;
     this.assignUnclaimedTasks();
     this.world.emitStats(this.running.size);
+    // External agents keep working while the world is paused; keep their status on the map current.
+    syncEmailAgents(w);
     if (w.data.paused) return;
     // External (email) agents need no Claude engine. With a mail account connected their tasks and
     // messages are emailed automatically; see agents/email.ts.
@@ -92,6 +94,7 @@ export class Scheduler {
       const messages = w.pendingMessagesFor(agent.id);
       if (messages.length) routeMessagesToEmailAgent(w, agent, messages);
     }
+    syncEmailAgents(w);
     const engine = this.engine();
     if (!engine) {
       // Leave work queued instead of failing it; the UI explains how to fix this.

@@ -1349,3 +1349,50 @@ pre.live {
     width: calc(100% - 80px);
   }
 }
+
+/* External agents */
+.email-tasks {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.email-tasks li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-top: 1px dashed var(--soft-line);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.email-tasks li:hover b {
+  text-decoration: underline;
+}
+
+.email-tasks .chip {
+  text-transform: none;
+}
+
+.reply-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--soft-line);
+}
+
+.reply-actions .label {
+  margin: 0;
+}
+
+.reply-actions label.check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
